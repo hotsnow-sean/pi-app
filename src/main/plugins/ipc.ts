@@ -68,6 +68,12 @@ export function registerPluginHandlers(): void {
           entry: v.entry,
         })),
         panels: (p.manifest?.panels ?? []).map((panel) => ({ id: panel.id, title: panel.title })),
+        /** 会话级工具：参数 schema 不下发（大且 renderer 用不到），只给名字与工具卡 */
+        tools: (p.manifest?.tools ?? []).map((tool) => ({
+          name: tool.name,
+          label: tool.label,
+          card: tool.card ?? null,
+        })),
         /** 声明式设置项（只有 schema，值另取，避免目录被人人拉一遍全量设置） */
         settings: p.manifest?.settings ?? [],
       })),

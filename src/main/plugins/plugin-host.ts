@@ -4,7 +4,10 @@ import path from 'node:path'
 import { Notification, app } from 'electron'
 import { findPlugin, setPluginEnabled } from './plugin-manager'
 import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
+import { askInHost, cancelPluginUIRequests } from './plugin-ui'
+import { cancelPluginToolCallsFor } from './plugin-tools'
 import type { PluginManifest } from '@shared/plugin-manifest'
+import type { PluginUIQuestion, PluginUIQuestionnaireResult } from '@shared/plugin-ui'
 import { errorMessage } from '@shared/error-message'
 
 /**
@@ -119,6 +122,16 @@ function buildContext(pluginId: string) {
         console.warn(`[plugin:${pluginId}] notify failed:`, error)
       }
     },
+    /**
+     * 插件 → 用户的界面请求。目前只有问卷（复用宿主的 QuestionnaireDialog）——
+     * 这是"插件工具能在会话里停下来等用户"的前提，也是 ask 那一类插件的全部依赖。
+     */
+    ui: {
+      ask: (
+        questions: PluginUIQuestion[],
+        opts?: { timeoutMs?: number; signal?: AbortSignal },
+      ): Promise<PluginUIQuestionnaireResult> => askInHost(pluginId, questions, opts),
+    },
     runAgentPrompt,
     log: (...args: unknown[]): void => console.log(`[plugin:${pluginId}]`, ...args),
   }
@@ -167,6 +180,9 @@ export function deactivatePlugin(pluginId: string): void {
   const instance = active.get(pluginId)
   if (!instance) return
   active.delete(pluginId)
+  // 停用即收回它伸出去的手：挂着的对话框与会话里的工具调用都该结束，别把用户卡在弹窗里
+  cancelPluginUIRequests(pluginId)
+  cancelPluginToolCallsFor(pluginId)
   try {
     void instance.deactivate?.()
   } catch (error) {

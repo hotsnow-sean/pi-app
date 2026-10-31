@@ -7,6 +7,7 @@ import { normalizeSessionFileKey } from '@renderer/lib/session-file-key'
 import { ToolIcon } from './tool-icon'
 import { renderToolCard } from './tool-card-templates'
 import { resolveAdapterToolCardTemplate, resolveToolCardTemplate } from './tool-card-registry'
+import { usePluginToolCardVersion } from '@renderer/features/plugins/plugin-tool-cards'
 import { tryRenderAdapterToolCard } from '@extension-compat/renderer/render-adapter-tool-card'
 import { McpToolPreview, renderNativeToolPreview } from './tool-previews'
 import { mcpArgSummary, mcpToolLabel, resolveMcpTool } from './mcp-tool'
@@ -69,6 +70,8 @@ function ToolCallRowImpl({
   autoExpandedInBudget?: boolean
 }) {
   const { t } = useTranslation()
+  // 插件工具卡来自插件目录（异步），目录就绪后让行重渲染一次，图标/模板随之到位
+  usePluginToolCardVersion()
   const agentRunning = useUIStore((s) => s.runState.status === 'running')
   const activeRunId = useUIStore((s) => s.runState.activeRunId)
   const expandKey = item.toolCallId || item.id
@@ -126,7 +129,7 @@ function ToolCallRowImpl({
   }
 
   return (
-    <div className={cn('tool-call-row', compact ? 'py-0' : 'py-0')}>
+    <div className={cn('tool-call-row', compact ? 'py-0' : 'py-0')} data-tool-name={item.toolName || undefined}>
       <button
         type="button"
         title={skillContext ? primaryLabel : item.toolName || undefined}

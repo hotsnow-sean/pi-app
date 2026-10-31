@@ -480,6 +480,14 @@ export class WorkerManager {
     await this.request('setCapabilities', { sections, tools, sessionFile })
   }
 
+  /**
+   * 启用插件声明的工具目录，随每次 prompt 下发（与 capabilities 同理）：
+   * 插件启停后不必重启 worker，下一轮就对模型生效。
+   */
+  async setPluginTools(tools: unknown[], sessionFile?: string): Promise<void> {
+    await this.request('setPluginTools', { tools, sessionFile })
+  }
+
   async sendPrompt(text: string, sessionFile?: string): Promise<void> {
     await this.request('prompt', { text, sessionFile })
   }

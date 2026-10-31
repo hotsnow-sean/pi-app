@@ -1186,7 +1186,7 @@
   },
   "plugins": {
     "title": "Plugins",
-    "description": "Plugins add whole feature pages to the app (sidebar Apps entries), right-panel tabs, and can declare their own settings. Built-in plugins ship with the app and can only be disabled; installed ones can be removed at any time.",
+    "description": "Plugins add whole feature pages (sidebar Apps entries), right-panel tabs, tools the model can call inside a conversation, and their own settings. Built-in plugins ship with the app and can only be disabled; installed ones can be removed at any time.",
     "loading": "Reading plugin catalog…",
     "install": "Install plugin…",
     "installing": "Installing…",
@@ -1217,7 +1217,8 @@
     "settingsReset": "Settings reset to defaults",
     "settingsSaveFailed": "Failed to save settings",
     "capabilities": "Capabilities",
-    "capabilitiesDesc": "Entry points the plugin registered with the host. Center views appear in the sidebar Apps area, panels in the right rail.",
+    "capabilitiesDesc": "What the plugin registers with the host: chat tools run inside conversations (the model calls them), center views appear under Apps in the sidebar, panels in the right rail.",
+    "capTool": "Chat tool",
     "capView": "Center view",
     "capPanel": "Side panel",
     "noCapabilities": "This plugin registers no UI entry points (it may run in the background only).",

@@ -7,6 +7,7 @@ import * as PiSettings from './handlers/worker-handlers-pi-settings.js'
 import { handleSetCapabilities } from './worker-capabilities.js'
 import { handleReloadModelRouters } from './worker-model-routers.js'
 import { handleBrowserToolResponse } from './worker-browser-tools.js'
+import { handlePluginToolResponse, handleSetPluginTools } from './worker-plugin-tools.js'
 
 const dispatch: Record<string, (msg: WorkerIncomingMessage, reply: WorkerReply) => Promise<void>> = {
   'init': Turn.handleInit,
@@ -24,6 +25,8 @@ const dispatch: Record<string, (msg: WorkerIncomingMessage, reply: WorkerReply) 
   'setCapabilities': handleSetCapabilities,
   'reloadModelRouters': handleReloadModelRouters,
   'browser-tool-response': handleBrowserToolResponse,
+  'plugin-tool-response': handlePluginToolResponse,
+  'setPluginTools': handleSetPluginTools,
   'newSession': Session.handleNewsession,
   'listSessions': Session.handleListsessions,
   'loadSession': Session.handleLoadsession,
