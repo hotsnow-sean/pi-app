@@ -172,6 +172,12 @@ function renderEdit() {
   const t = editingTask ?? {}
   const s = t.schedule ?? { kind: 'daily', time: '09:00', weekday: 1, day: 1 }
   const kind = s.kind || 'daily'
+  const needTime = kind === 'daily' || kind === 'weekly' || kind === 'monthly'
+  // 间隔任务的单位：能被 60 整除且 ≥60 用小时，否则用分钟
+  const ivMins = Math.max(1, Number(s.everyMinutes) || 60)
+  const ivUnit = ivMins >= 60 && ivMins % 60 === 0 ? 'h' : 'm'
+  const ivValue = ivUnit === 'h' ? ivMins / 60 : ivMins
+  const onceDefault = toLocalInput(new Date(Date.now() + 5 * 60_000).toISOString())
   const html = `
     <div class="head">
       <h1>${t.id ? '编辑定时任务' : '新建定时任务'}</h1>
@@ -193,12 +199,14 @@ function renderEdit() {
             <option value="daily" ${kind === 'daily' ? 'selected' : ''}>每天</option>
             <option value="weekly" ${kind === 'weekly' ? 'selected' : ''}>每周</option>
             <option value="monthly" ${kind === 'monthly' ? 'selected' : ''}>每月</option>
+            <option value="interval" ${kind === 'interval' ? 'selected' : ''}>间隔</option>
           </select>
         </div>
-        <div class="field">
+        ${needTime ? `
+        <div class="field" id="f-time-field">
           <label>时间</label>
           <input type="time" id="f-time" value="${esc(s.time ?? '09:00')}"/>
-        </div>
+        </div>` : ''}
       </div>
       <div class="row" id="f-weekday-row" style="display:${kind === 'weekly' ? 'flex' : 'none'}">
         <div class="field">
@@ -216,8 +224,20 @@ function renderEdit() {
       </div>
       <div class="row" id="f-once-row" style="display:${kind === 'once' ? 'flex' : 'none'}">
         <div class="field">
-          <label>执行时刻（缺省为 5 分钟后）</label>
-          <input type="datetime-local" id="f-at" value="${s.at ? toLocalInput(s.at) : ''}"/>
+          <label>执行时刻</label>
+          <input type="datetime-local" id="f-at" value="${s.at ? toLocalInput(s.at) : onceDefault}"/>
+        </div>
+      </div>
+      <div class="row" id="f-interval-row" style="display:${kind === 'interval' ? 'flex' : 'none'}">
+        <div class="field">
+          <label>每隔</label>
+          <input type="number" id="f-interval-value" min="1" step="1" value="${ivValue}"/>
+        </div>
+        <div class="field" style="align-self:end">
+          <select id="f-interval-unit">
+            <option value="m" ${ivUnit === 'm' ? 'selected' : ''}>分钟</option>
+            <option value="h" ${ivUnit === 'h' ? 'selected' : ''}>小时</option>
+          </select>
         </div>
       </div>
       <div class="row">
@@ -239,9 +259,12 @@ function renderEdit() {
   $app.replaceChildren(h(html))
   $app.querySelector('#f-kind').addEventListener('change', (e) => {
     const k = e.target.value
+    const timeField = $app.querySelector('#f-time-field')
+    if (timeField) timeField.style.display = ['daily', 'weekly', 'monthly'].includes(k) ? '' : 'none'
     $app.querySelector('#f-weekday-row').style.display = k === 'weekly' ? 'flex' : 'none'
     $app.querySelector('#f-day-row').style.display = k === 'monthly' ? 'flex' : 'none'
     $app.querySelector('#f-once-row').style.display = k === 'once' ? 'flex' : 'none'
+    $app.querySelector('#f-interval-row').style.display = k === 'interval' ? 'flex' : 'none'
   })
   $app.querySelector('#btn-cancel').addEventListener('click', () => {
     view = { name: 'list' }
@@ -259,16 +282,20 @@ function toLocalInput(iso) {
 async function saveTask() {
   const kind = $app.querySelector('#f-kind').value
   const atInput = $app.querySelector('#f-at')?.value
+  const ivValue = Number($app.querySelector('#f-interval-value')?.value)
+  const ivUnit = $app.querySelector('#f-interval-unit')?.value ?? 'm'
   const task = {
     id: editingTask?.id,
     name: $app.querySelector('#f-name').value.trim(),
     prompt: $app.querySelector('#f-prompt').value,
     schedule: {
       kind,
-      time: $app.querySelector('#f-time').value || '09:00',
+      // 时间只对每天/每周/每月有意义
+      time: ['daily', 'weekly', 'monthly'].includes(kind) ? ($app.querySelector('#f-time')?.value || '09:00') : undefined,
       weekday: Number($app.querySelector('#f-weekday')?.value ?? 1),
       day: Number($app.querySelector('#f-day')?.value ?? 1),
-      at: kind === 'once' && atInput ? new Date(atInput).toISOString() : undefined,
+      at: kind === 'once' ? new Date(atInput || Date.now() + 5 * 60_000).toISOString() : undefined,
+      everyMinutes: kind === 'interval' ? Math.max(1, Math.round(Number.isFinite(ivValue) && ivValue > 0 ? ivValue : 30) * (ivUnit === 'h' ? 60 : 1)) : undefined,
     },
     validUntil: $app.querySelector('#f-valid-until').value || null,
     cwd: $app.querySelector('#f-cwd').value.trim(),

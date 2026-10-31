@@ -5,7 +5,7 @@
  * 任务与执行历史存在插件隔离存储（ctx.storage），UI 通过 invoke() 调用本文件暴露的方法。
  *
  * 调度语义：
- * - kind: once / daily / weekly / monthly；time: 'HH:mm'；weekly.weekday(0=周日)；monthly.day(1-31，无该日顺延到存在该日的下月)
+ * - kind: once / daily / weekly / monthly / interval；time: 'HH:mm'；weekly.weekday(0=周日)；monthly.day(1-31，无该日顺延到存在该日的下月)；interval.everyMinutes(≥1)
  * - 触发：tick 每 5s；到点先推进 nextRunAt 再入队（防重复）
  * - 错过：once 任务错过（应用未运行）→ 启动时补跑一次；重复任务错过 → 顺延到下一个未来时刻，不补跑
  * - 并发：串行执行队列，同一时刻最多跑一个 agent prompt
@@ -94,6 +94,11 @@ export function computeNextRun(task, from = new Date()) {
       next = task.schedule?.at ? new Date(task.schedule.at).getTime() : null
       if (next !== null && next <= from.getTime()) return null
       break
+    case 'interval': {
+      const step = Math.max(1, Number(task.schedule?.everyMinutes) || 60) * 60_000
+      next = from.getTime() + step
+      break
+    }
   }
   if (next === null) return null
   if (task.validUntil) {
@@ -116,6 +121,14 @@ function scheduleLabel(task) {
       return `每月 ${s.day ?? 1} 日 ${time}`
     case 'once':
       return s.at ? `一次 · ${new Date(s.at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '一次'
+    case 'interval': {
+      const mins = Math.max(1, Number(s.everyMinutes) || 60)
+      if (mins >= 60 && mins % 60 === 0) {
+        const h = mins / 60
+        return h === 1 ? '每小时' : `每隔 ${h} 小时`
+      }
+      return mins === 1 ? '每分钟' : `每隔 ${mins} 分钟`
+    }
     default:
       return time
   }
@@ -266,10 +279,11 @@ const methods = {
     saved.name = String(task.name || '').trim() || '未命名任务'
     saved.prompt = String(task.prompt || '')
     saved.schedule = {
-      kind: ['once', 'daily', 'weekly', 'monthly'].includes(task.schedule?.kind) ? task.schedule.kind : 'daily',
+      kind: ['once', 'daily', 'weekly', 'monthly', 'interval'].includes(task.schedule?.kind) ? task.schedule.kind : 'daily',
       time: /^\d{2}:\d{2}$/.test(task.schedule?.time ?? '') ? task.schedule.time : '09:00',
       weekday: Number.isInteger(task.schedule?.weekday) ? task.schedule.weekday : 1,
       day: Number.isInteger(task.schedule?.day) ? task.schedule.day : 1,
+      everyMinutes: Math.min(43_200, Math.max(1, Math.round(Number(task.schedule?.everyMinutes)) || 60)),
       at: task.schedule?.kind === 'once' && task.schedule?.at ? String(task.schedule.at) : undefined,
     }
     saved.cwd = String(task.cwd || '').trim()
