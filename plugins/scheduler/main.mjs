@@ -329,6 +329,11 @@ const methods = {
     const runs = (taskId ? state.runs.filter((r) => r.taskId === taskId) : state.runs).slice(0, cap)
     return { runs }
   },
+  async deleteRun({ id }) {
+    state.runs = state.runs.filter((r) => r.id !== id)
+    save()
+    return { ok: true }
+  },
   async nextRunPreview({ schedule }) {
     const probe = { enabled: true, schedule }
     return { nextRunAt: computeNextRun(probe, new Date()) }
