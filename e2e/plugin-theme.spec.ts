@@ -24,17 +24,21 @@ test('scheduler panel follows host theme', async () => {
       bg: await frame.locator('body').evaluate((el) => getComputedStyle(el).backgroundColor),
       fg: await frame.locator('body').evaluate((el) => getComputedStyle(el).color),
       piBg: await frame.locator('html').evaluate((el) => el.style.getPropertyValue('--pi-background').trim()),
+      // 原生时间/日期选择器的图标与弹层只认这个属性
+      scheme: await frame.locator('html').evaluate((el) => getComputedStyle(el).colorScheme),
     })
 
     const light = await read()
     expect(light.piBg).not.toBe('')
     expect(light.bg).toBe('rgb(255, 255, 255)')
+    expect(light.scheme).toBe('light')
 
     // 与设置页同一机制：外观切换只改 documentElement 的 dark 类
     await win.evaluate(() => document.documentElement.classList.add('dark'))
     await expect.poll(async () => (await read()).bg, { timeout: 10_000 }).toBe('rgb(31, 31, 31)')
     const dark = await read()
     expect(dark.fg).toBe('rgb(204, 204, 204)')
+    expect(dark.scheme).toBe('dark')
 
     await win.evaluate(() => document.documentElement.classList.remove('dark'))
     await expect.poll(async () => (await read()).bg, { timeout: 10_000 }).toBe('rgb(255, 255, 255)')
