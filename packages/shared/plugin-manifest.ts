@@ -89,6 +89,36 @@ export const pluginSettingFieldSchema = z
 
 export type PluginSettingField = z.infer<typeof pluginSettingFieldSchema>
 
+/**
+ * 插件工具（会话级贡献点）。
+ *
+ * 与 panels / views 的根本差别：工具跑在**对话里**，不是一块界面。宿主把 tools[] 注入
+ * 每个会话的 pi SDK（customTools / inline extension），模型可以直接调用，插件成为
+ * "伸进会话的那只手"。执行落在 main 进程（main.mjs 的 invoke('tool.execute')），
+ * 所以插件拿不到会话内部状态，但能拿到 ctx.ui / ctx.storage——足够 ask 这一类交互。
+ *
+ * parameters 用纯 JSON Schema（与 MCP 一致），宿主原样交给 pi 做参数校验。
+ */
+export const pluginToolContributionSchema = z.object({
+  /** 模型看到的工具名（全局唯一，小写字母数字下划线） */
+  name: z.string().regex(/^[a-z][a-z0-9_]*$/, 'tool name must be lowercase alphanumeric/underscore'),
+  /** 界面标签（工具卡标题） */
+  label: z.string().min(1),
+  /** 给模型看的说明，写清何时用、参数含义 */
+  description: z.string().min(1),
+  /** JSON Schema（type: object）。宿主只做形状校验，语义由插件自己把关 */
+  parameters: z.record(z.string(), z.unknown()).default({ type: 'object', properties: {} }),
+  /** 时间线工具卡：模板与图标。缺省按 default 模板渲染 */
+  card: z
+    .object({
+      template: z.enum(['default', 'kv', 'list', 'tree', 'media']).optional(),
+      icon: z.string().optional(),
+    })
+    .optional(),
+})
+
+export type PluginToolContribution = z.infer<typeof pluginToolContributionSchema>
+
 export const pluginManifestSchema = z.object({
   /** 插件 id，全局唯一，小写字母数字连字符 */
   id: z.string().regex(PLUGIN_ID_PATTERN, 'plugin id must be lowercase alphanumeric/dash'),
@@ -111,6 +141,8 @@ export const pluginManifestSchema = z.object({
   views: z.array(pluginViewContributionSchema).default([]),
   /** 声明式设置项：设置页「插件」里由宿主渲染表单 */
   settings: z.array(pluginSettingFieldSchema).default([]),
+  /** 会话级工具：注入 pi 会话，模型可直接调用 */
+  tools: z.array(pluginToolContributionSchema).default([]),
 })
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>
@@ -168,8 +200,7 @@ export function pluginIdFromAdapterId(adapterId: string): string {
   return adapterId.slice('plugin:'.length)
 }
 
-/** 设置项默认值表（只含有 default 的键） */
-export function pluginSettingDefaults(fields: readonly PluginSettingField[]): Record<string, unknown> {
+/** 设置项默认值表（只含有 default 的键） */export function pluginSettingDefaults(fields: readonly PluginSettingField[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const field of fields) {
     if (field.default !== undefined) out[field.key] = field.default
@@ -205,4 +236,24 @@ export function coercePluginSettingValue(field: PluginSettingField, raw: unknown
     default:
       return typeof raw === 'string' ? raw : raw === undefined || raw === null ? undefined : String(raw)
   }
+}
+
+/**
+ * 下发给 worker 的工具目录行（会话只需要这些字段）。
+ * 宿主 main 在每次 prompt 前重发一份，worker 据此注册 / 摘除工具。
+ */
+export type PluginToolDescriptor = {
+  pluginId: string
+  name: string
+  label: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+/** 插件工具执行契约：main 侧 invoke('tool.execute', { name, args }) 的返回 */
+export type PluginToolResult = {
+  /** 回灌给模型的文本 */
+  text: string
+  /** 标记失败（模型会看到错误文本并自行决定重试） */
+  isError?: boolean
 }

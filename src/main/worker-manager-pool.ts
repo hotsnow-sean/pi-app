@@ -246,6 +246,22 @@ export function attachWorkerHandlers(
         .catch(() => undefined)
     }
 
+    // 插件工具调用：执行体在 main（插件 main.mjs），worker 只负责转发与等结果
+    if (data.type === 'plugin-tool-request') {
+      void import('./plugins/plugin-tools')
+        .then(({ handlePluginToolRequest }) =>
+          handlePluginToolRequest(data as Record<string, unknown>, (payload) => {
+            if (slot.worker === transport) transport.postMessage(payload)
+          }),
+        )
+        .catch((error) => safeWrite(`[WorkerManager] plugin tool failed: ${String(error)}`))
+    }
+    if (data.type === 'plugin-tool-cancel') {
+      void import('./plugins/plugin-tools')
+        .then(({ cancelPluginTool }) => cancelPluginTool(String(data.callId ?? '')))
+        .catch(() => undefined)
+    }
+
     if (data.type === 'init-done' && slot.initResolver) {
       slot.sdkFallback = !!data.sdkFallback
       if (slot.sdkFallback) safeWrite('[WorkerManager] Target SDK import failed, worker fell back to builtin')
