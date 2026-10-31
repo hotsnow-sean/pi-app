@@ -60,7 +60,10 @@ export function registerAdapterPanelHandlers(): void {
     const probed = needsInstalled ? await probeExtensionsShared(cwd) : []
     const installedNames = new Set(probed.filter((probe) => probe.enabled).flatMap((p) => [p.name, p.packageName].filter(Boolean) as string[]))
     const adapterPanels = listAdapterSidePanelMetas(cwd, installedNames)
-    const catalog = mergeRightPanelCatalog(adapterPanels)
+    const pluginPanels = (await import('../../plugins/ipc')).pluginAdapterPanels(
+      (await import('../../plugins/plugin-manager')).discoverPlugins(),
+    )
+    const catalog = mergeRightPanelCatalog([...adapterPanels, ...pluginPanels])
     const stored = configStore.get('rightPanelPrefs')
     const prefs = normalizeRightPanelPrefs(stored, catalog)
     const order = normalizeRightPanelOrder(configStore.get('rightPanelOrder'), catalog)
@@ -81,7 +84,10 @@ export function registerAdapterPanelHandlers(): void {
     const probed = needsInstalled ? await probeExtensionsShared(cwd) : []
     const installedNames = new Set(probed.filter((probe) => probe.enabled).flatMap((p) => [p.name, p.packageName].filter(Boolean) as string[]))
     const adapterPanels = listAdapterSidePanelMetas(cwd, installedNames)
-    const catalog = mergeRightPanelCatalog(adapterPanels)
+    const pluginPanels = (await import('../../plugins/ipc')).pluginAdapterPanels(
+      (await import('../../plugins/plugin-manager')).discoverPlugins(),
+    )
+    const catalog = mergeRightPanelCatalog([...adapterPanels, ...pluginPanels])
     const prefs = normalizeRightPanelPrefs(req?.prefs, catalog)
     const order = normalizeRightPanelOrder(req?.order, catalog)
     configStore.setRightPanelLayout(prefs, order)

@@ -1,0 +1,232 @@
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import { Notification, app } from 'electron'
+import { findPlugin, setPluginEnabled } from './plugin-manager'
+import type { PluginManifest } from '@shared/plugin-manifest'
+import { errorMessage } from '@shared/error-message'
+
+/**
+ * 插件 main 侧宿主：动态加载 main.mjs，注入受控 API（ctx），转发 invoke。
+ *
+ * 插件入口约定（ESM）：
+ *   export async function activate(ctx) → 可返回 { invoke(method, params) }
+ *   export async function deactivate()  → 可选
+ *
+ * 第一版 ctx：
+ *   - storage.get() / storage.set(data)   按插件隔离的 JSON 存储
+ *   - notify(title, body)                 系统通知
+ *   - runAgentPrompt({ cwd, prompt })     headless 执行一次 agent prompt
+ *   - log(...args)                        带插件前缀的日志
+ */
+
+type PluginInstance = {
+  manifest: PluginManifest
+  dir: string
+  instance: { invoke?: (method: string, params: Record<string, unknown>) => Promise<unknown> }
+  deactivate?: () => unknown
+}
+
+const active = new Map<string, PluginInstance>()
+
+// 规避 bundler 对动态路径 import() 的静态分析
+const dynamicImport = new Function('url', 'return import(url)') as (url: string) => Promise<Record<string, unknown>>
+
+function pluginDataDir(pluginId: string): string {
+  return path.join(app.getPath('userData'), 'plugin-data', pluginId)
+}
+
+function readStorage(pluginId: string): Record<string, unknown> {
+  try {
+    const file = path.join(pluginDataDir(pluginId), 'data.json')
+    if (!fs.existsSync(file)) return {}
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+function writeStorage(pluginId: string, data: Record<string, unknown>): void {
+  const dir = pluginDataDir(pluginId)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(data, null, 2))
+}
+
+async function runAgentPrompt(opts: {
+  cwd: string
+  prompt: string
+  timeoutMs?: number
+}): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const timeoutMs = opts.timeoutMs ?? 10 * 60_000
+  let session: import('@earendil-works/pi-coding-agent').AgentSession | null = null
+  try {
+    const pi = await import('@earendil-works/pi-coding-agent')
+    const created = await pi.createAgentSession({
+      cwd: opts.cwd,
+      sessionManager: pi.SessionManager.inMemory(),
+    })
+    session = created.session
+    // PromptOptions 无 signal：超时通过 abort() 中止，prompt 随之返回；race 兜底
+    const timer = setTimeout(() => void session?.abort(), timeoutMs)
+    try {
+      await Promise.race([
+        session.prompt(opts.prompt),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`prompt timed out after ${Math.round(timeoutMs / 60_000)} min`)), timeoutMs + 30_000),
+        ),
+      ])
+      return { ok: true, text: session.getLastAssistantText() ?? '' }
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) }
+  } finally {
+    try {
+      await session?.dispose()
+    } catch {
+      /* dispose 二次失败可忽略 */
+    }
+  }
+}
+
+function buildContext(pluginId: string) {
+  return {
+    pluginId,
+    storage: {
+      get: (): Record<string, unknown> => readStorage(pluginId),
+      set: (data: Record<string, unknown>): void => writeStorage(pluginId, data),
+    },
+    notify: (title: string, body?: string): void => {
+      try {
+        if (!Notification.isSupported()) return
+        const n = new Notification({ title, body })
+        n.on('click', () => app.focus({ steal: false }))
+        n.show()
+      } catch (error) {
+        console.warn(`[plugin:${pluginId}] notify failed:`, error)
+      }
+    },
+    runAgentPrompt,
+    log: (...args: unknown[]): void => console.log(`[plugin:${pluginId}]`, ...args),
+  }
+}
+
+export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; error?: string }> {
+  if (active.has(pluginId)) return { ok: true }
+  const found = findPlugin(pluginId)
+  if (!found || !found.manifest) return { ok: false, error: 'plugin not found' }
+  if (!found.enabled) return { ok: false, error: 'plugin disabled' }
+  const manifest = found.manifest
+  const entry = manifest.main ?? 'main.mjs'
+  const entryPath = path.join(found.dir, entry)
+  if (!fs.existsSync(entryPath)) {
+    // 纯 UI 插件可以没有 main
+    return { ok: true }
+  }
+  try {
+    const mod = (await dynamicImport(
+      `file://${entryPath.split(path.sep).join('/')}`,
+    )) as {
+      activate?: (ctx: unknown) => Promise<unknown> | unknown
+      deactivate?: () => unknown
+    }
+    const ctx = buildContext(pluginId)
+    const instance = (await mod.activate?.(ctx)) ?? {}
+    active.set(pluginId, {
+      manifest,
+      dir: found.dir,
+      instance: instance as PluginInstance['instance'],
+      deactivate: () => mod.deactivate?.(),
+    })
+    return { ok: true }
+  } catch (error) {
+    console.error(`[plugin-host] activate ${pluginId} failed:`, error)
+    return { ok: false, error: errorMessage(error) }
+  }
+}
+
+export function deactivatePlugin(pluginId: string): void {
+  const instance = active.get(pluginId)
+  if (!instance) return
+  active.delete(pluginId)
+  try {
+    void instance.deactivate?.()
+  } catch (error) {
+    console.warn(`[plugin-host] deactivate ${pluginId} failed:`, error)
+  }
+}
+
+/** 启停：更新持久化状态并 activate / deactivate */
+export async function applyPluginEnabled(pluginId: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> {
+  setPluginEnabled(pluginId, enabled)
+  if (enabled) return activatePlugin(pluginId)
+  deactivatePlugin(pluginId)
+  return { ok: true }
+}
+
+/** 启动时激活所有 enabled 插件（逐个隔离失败） */
+export async function activateEnabledPlugins(): Promise<void> {
+  const { discoverPlugins } = await import('./plugin-manager')
+  for (const plugin of discoverPlugins()) {
+    if (!plugin.manifest || !plugin.enabled) continue
+    const r = await activatePlugin(plugin.manifest.id)
+    if (!r.ok) console.warn(`[plugin-host] ${plugin.manifest.id} not activated: ${r.error}`)
+  }
+}
+
+export async function invokePlugin(
+  pluginId: string,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+  const instance = active.get(pluginId)
+  if (!instance) return { ok: false, error: `plugin not active: ${pluginId}` }
+  if (typeof instance.instance.invoke !== 'function') return { ok: false, error: 'plugin has no invoke handler' }
+  try {
+    const result = await instance.instance.invoke(method, params)
+    return { ok: true, result }
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) }
+  }
+}
+
+/** 插件面板入口 HTML 的绝对路径（protocol.ts 用） */
+export function resolvePluginPanelEntry(pluginId: string, entry: string): string | null {
+  const found = findPlugin(pluginId)
+  if (!found || !found.manifest) return null
+  const full = path.resolve(found.dir, entry)
+  const root = path.resolve(found.dir)
+  if (!full.startsWith(root)) return null // 防路径穿越
+  return full
+}
+
+export async function readPluginPanelFile(fullPath: string): Promise<{ data: Buffer; mime: string } | null> {
+  try {
+    const data = await fsp.readFile(fullPath)
+    return { data, mime: mimeForPath(fullPath) }
+  } catch {
+    return null
+  }
+}
+
+function mimeForPath(p: string): string {
+  const ext = path.extname(p).toLowerCase()
+  const table: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+  }
+  return table[ext] ?? 'application/octet-stream'
+}

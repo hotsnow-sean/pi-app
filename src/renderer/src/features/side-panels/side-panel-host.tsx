@@ -1,6 +1,8 @@
 import { Suspense, lazy } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RightPanelCatalogItem } from '@shared/right-panels'
+import { isPluginAdapterId, pluginIdFromAdapterId } from '@shared/plugin-manifest'
+import { PluginPanelFrame } from '@renderer/features/plugins/plugin-panel-frame'
 import { GenericAdapterSidePanel } from './generic-adapter-side-panel'
 import { WorkspaceTasksSidePanel } from './workspace-tasks-side-panel'
 
@@ -24,6 +26,10 @@ export function SidePanelHost({ item }: { item: RightPanelCatalogItem | undefine
   const wrap = (node: React.ReactNode) => <Suspense fallback={null}>{node}</Suspense>
 
   if (item.adapterId) {
+    // 应用级插件面板：pi-plugin:// iframe 容器（独立于 adapter 渲染体系）
+    if (isPluginAdapterId(item.adapterId)) {
+      return <PluginPanelFrame pluginId={pluginIdFromAdapterId(item.adapterId)} panelId={item.id} title={item.fallbackLabel} />
+    }
     const comp = item.panelComponent || 'generic-json'
     const Panel = ADAPTER_PANEL_COMPONENTS[comp] || GenericAdapterSidePanel
     return (
