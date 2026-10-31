@@ -1,27 +1,18 @@
+/* 主题跟随宿主：--pi-* 由宿主 renderer 推送（见 plugin-panel-frame 主题契约），
+   引用应用同名 token；未收到推送前用浅色兜底。 */
 :root {
-  --bg: #f7f8fa;
-  --card: #ffffff;
-  --border: #e5e7eb;
-  --text: #1a1f36;
-  --text-2: #6b7280;
-  --accent: #2563eb;
-  --accent-weak: #eff4ff;
-  --accent-border: #c7d7fe;
+  --bg: var(--pi-background, #f7f8fa);
+  --card: var(--pi-card, #ffffff);
+  --border: var(--pi-border, #e5e7eb);
+  --text: var(--pi-foreground, #1a1f36);
+  --text-2: var(--pi-muted-foreground, #6b7280);
+  /* 主按钮/选中态跟随应用 primary（浅色主题下为近黑，与宿主按钮一致） */
+  --accent: var(--pi-primary, #2563eb);
+  --accent-weak: var(--pi-accent, #eff4ff);
+  --accent-border: var(--pi-border, #c7d7fe);
   --ok: #16a34a;
-  --err: #dc2626;
-  --radius: 12px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17181c;
-    --card: #22242a;
-    --border: #34373f;
-    --text: #e6e7ea;
-    --text-2: #9aa0ab;
-    --accent: #5b8def;
-    --accent-weak: #26314a;
-    --accent-border: #3b4f7d;
-  }
+  --err: var(--pi-destructive, #dc2626);
+  --radius: var(--pi-radius, 12px);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -39,7 +30,7 @@ body {
 .head h1 { margin: 0; font-size: 15px; font-weight: 600; }
 .btn {
   border: none; border-radius: 8px; padding: 6px 14px; font-size: 13px; cursor: pointer;
-  background: var(--accent); color: #fff; font-family: inherit;
+  background: var(--accent); color: var(--pi-primary-foreground, #fff); font-family: inherit;
 }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.ghost { background: var(--card); color: var(--text); border: 1px solid var(--border); }
@@ -74,8 +65,7 @@ body {
 /* 开关 */
 .switch { position: relative; width: 34px; height: 19px; flex: none; }
 .switch input { opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; position: absolute; z-index: 1; }
-.switch .track { position: absolute; inset: 0; background: #c9cdd4; border-radius: 999px; transition: background .15s; }
-@media (prefers-color-scheme: dark) { .switch .track { background: #4a4e58; } }
+.switch .track { position: absolute; inset: 0; background: var(--pi-input, #c9cdd4); border-radius: 999px; transition: background .15s; }
 .switch .track::after {
   content: ''; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
   background: #fff; border-radius: 50%; transition: transform .15s;
