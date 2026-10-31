@@ -21,6 +21,8 @@ export type PluginPanelFrameProps = {
  *   ← { type: 'plugin-theme', vars: Record<string,string> }  主题 token（含自定义主题），切换/修改时重推
  *   ← { type: 'plugin-settings', values: Record<string,unknown> }  声明式设置项的值，握手时下发一次
  *
+ * 主题不进握手依赖：iframe load 后无条件补推一次，插件 UI 忘了发 hello 也不会停在自带兜底色上。
+ *
  * 设置只读：写入口在设置页（宿主渲染表单）。插件 UI 拿到值后自行显示/生效即可。
  *
  * 主题契约：vars 是 `--pi-*` 名到**可直接使用**的 CSS 值的映射，插件在 documentElement
@@ -184,6 +186,12 @@ export function PluginPanelFrame({ pluginId, panelId, title, entry }: PluginPane
         title={title ?? `plugin:${pluginId}`}
         src={`pi-plugin://${pluginId}/${(entry ?? 'ui/index.html').replace(/^\/+/, '')}`}
         sandbox="allow-scripts allow-forms allow-modals"
+        onLoad={() => {
+          // 兜底：不依赖插件 UI 记得发 hello。load 晚于首屏脚本执行，
+          // 监听器已就位，所以这里推一次主题能真正落地，避免界面停在插件自带兜底色上。
+          const frame = iframeRef.current
+          frame?.contentWindow?.postMessage({ type: 'plugin-theme', vars: collectThemeVars() }, '*')
+        }}
       />
     </div>
   )
