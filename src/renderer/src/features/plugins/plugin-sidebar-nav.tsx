@@ -1,8 +1,9 @@
 import { useTranslation } from 'react-i18next'
 import { useUIStore } from '@renderer/stores/ui-store'
-import { normalizeLegacyIconName, resolveAppIcon, type AppIconName } from '@renderer/components/icons'
+import { resolveAppIcon } from '@renderer/components/icons'
 import { cn } from '@renderer/lib/utils'
 import { CHAT_CENTER_VIEW, pluginViewGlobalId, type CenterView } from '@shared/plugin-manifest'
+import { resolvePluginIcon } from './plugin-icon'
 import { usePluginViews, type PluginViewEntry } from './use-plugin-views'
 
 /**
@@ -12,15 +13,6 @@ import { usePluginViews, type PluginViewEntry } from './use-plugin-views'
  * 没有插件声明 views 时整块不渲染，宿主外观与未装插件时完全一致。
  * 再次点击已激活的入口 = 回到对话。
  */
-
-/** 插件图标名 → 宿主图标：先按原名查表，再把 PascalCase 转成 kebab 重查（AlarmClock → alarm-clock） */
-function resolvePluginIcon(raw: string | undefined): AppIconName {
-  if (!raw) return 'panel-right'
-  const direct = normalizeLegacyIconName(raw)
-  if (direct) return direct
-  const kebab = raw.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
-  return normalizeLegacyIconName(kebab) ?? 'panel-right'
-}
 
 function viewToCenterView(view: PluginViewEntry): CenterView {
   return { kind: 'plugin', pluginId: view.pluginId, viewId: view.id }

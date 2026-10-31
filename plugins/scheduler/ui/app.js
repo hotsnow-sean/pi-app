@@ -5,11 +5,18 @@
 let invokeSeq = 0
 const waiters = new Map()
 
+/** 声明式设置项的当前值（宿主握手时下发一次，见 plugin-panel-frame 的 plugin-settings） */
+let pluginSettings = {}
+
 window.addEventListener('message', (event) => {
   const data = event.data
   if (!data || typeof data !== 'object') return
   if (data.type === 'plugin-theme') {
     applyTheme(data.vars)
+    return
+  }
+  if (data.type === 'plugin-settings') {
+    pluginSettings = data.values && typeof data.values === 'object' ? data.values : {}
     return
   }
   if (data.type === 'plugin-invoke-result') {
@@ -309,8 +316,8 @@ function renderEdit() {
         </div>
       </div>
       <div class="field">
-        <label>工作空间目录（留空 = 用户主目录）</label>
-        <input type="text" id="f-cwd" placeholder="例如 C:\\Users\\me\\projects\\demo" value="${esc(t.cwd ?? '')}"/>
+        <label>工作空间目录（留空 = 设置里的默认目录）</label>
+        <input type="text" id="f-cwd" placeholder="例如 C:\\Users\\me\\projects\\demo" value="${esc(t.cwd || (!t.id ? pluginSettings.defaultCwd || '' : ''))}"/>
       </div>
       <div class="form-actions">
         <button class="btn ghost" id="btn-cancel">取消</button>
