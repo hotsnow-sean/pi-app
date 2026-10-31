@@ -78,8 +78,8 @@ body {
 /* ---------- 表单 ---------- */
 .field { margin-bottom: 12px; }
 .field label { display: block; margin-bottom: 5px; color: var(--text-2); font-size: 12px; }
-.field input[type="text"], .field input[type="time"], .field input[type="date"], .field input[type="number"],
-.field select, .field textarea {
+.field input[type="text"], .field input[type="time"], .field input[type="date"], .field input[type="datetime-local"],
+.field input[type="number"], .field select, .field textarea {
   width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
   font-size: 13px; font-family: inherit; background: var(--card); color: var(--text);
 }
