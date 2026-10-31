@@ -532,7 +532,7 @@ async function toggleTask(t, enabled) {
 // ---------- 启动 ----------
 
 async function boot() {
-  window.parent.postMessage({ type: 'plugin-hello', panelId: 'scheduler:tasks' }, '*')
+  window.parent.postMessage({ type: 'plugin-hello', panelId: 'scheduler:main' }, '*')
   await refresh()
   render()
   // 5s 轮询：倒计时推进 + 立即运行 / 触发执行后的状态同步

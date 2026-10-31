@@ -30,6 +30,10 @@ function applyTheme(vars) {
   }
 }
 
+// 握手：主文档只有收到 hello 才回推 plugin-ready / plugin-theme / plugin-settings。
+// 少了这一步，界面会一直停在 style.css 的浅色兜底上（宿主换主题也不会有反应）。
+window.parent.postMessage({ type: 'plugin-hello', panelId: 'ask:main' }, '*')
+
 function api(method, params) {
   const requestId = ++invokeSeq
   window.parent.postMessage({ type: 'plugin-invoke', requestId, method, params }, '*')
