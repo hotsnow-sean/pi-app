@@ -21,6 +21,21 @@ let state = { tasks: [], runs: [] }
 const queue = []
 let draining = false
 
+/**
+ * 声明式设置项（plugin.json 的 settings[]）的当前值。
+ * 只读：写入口在设置的「插件」页，宿主写完会回调 onChange。
+ */
+const SETTING_DEFAULTS = { notifyOnStart: true, defaultCwd: '', historyLimit: 30 }
+let settings = { ...SETTING_DEFAULTS }
+
+function loadSettings() {
+  try {
+    settings = { ...SETTING_DEFAULTS, ...(ctx.settings?.get?.() ?? {}) }
+  } catch {
+    settings = { ...SETTING_DEFAULTS }
+  }
+}
+
 // ---------- 存储 ----------
 
 function load() {
@@ -203,13 +218,15 @@ async function drain() {
 
 async function execute(task, missed) {
   const startedAt = Date.now()
-  ctx.notify(`定时任务：${task.name}`, missed ? '错过调度，正在补跑' : '任务开始执行')
+  if (settings.notifyOnStart !== false) {
+    ctx.notify(`定时任务：${task.name}`, missed ? '错过调度，正在补跑' : '任务开始执行')
+  }
   let ok = false
   let text = ''
   let error = ''
   try {
     const result = await ctx.runAgentPrompt({
-      cwd: task.cwd || '',
+      cwd: task.cwd || settings.defaultCwd || '',
       prompt: task.prompt || '',
       timeoutMs: 15 * 60_000,
     })
@@ -234,7 +251,7 @@ async function execute(task, missed) {
     error,
   }
   state.runs.unshift(run)
-  if (state.runs.length > MAX_RUNS) state.runs.length = MAX_RUNS
+  pruneRuns(task.id)
   task.lastRunAt = startedAt
   task.lastRunOk = ok
   save()
@@ -242,6 +259,21 @@ async function execute(task, missed) {
     `定时任务：${task.name}`,
     ok ? `执行完成，用时 ${Math.round(run.durationMs / 1000)}s` : `执行失败：${error.slice(0, 120)}`,
   )
+}
+
+/** 按设置里的 historyLimit 清理单个任务的旧记录；全局上限 MAX_RUNS 兜底 */
+function pruneRuns(taskId) {
+  const limit = Math.max(1, Math.round(Number(settings.historyLimit) || SETTING_DEFAULTS.historyLimit))
+  let seen = 0
+  const keep = []
+  for (const run of state.runs) {
+    if (run.taskId === taskId) {
+      seen += 1
+      if (seen > limit) continue
+    }
+    keep.push(run)
+  }
+  state.runs = keep.length > MAX_RUNS ? keep.slice(0, MAX_RUNS) : keep
 }
 
 // ---------- invoke 方法（UI 调用） ----------
@@ -344,6 +376,12 @@ const methods = {
 
 export async function activate(pluginContext) {
   ctx = pluginContext
+  loadSettings()
+  // 设置页改完立即生效，不必重启插件；回调里重新读取以拿到合并后的完整值
+  ctx.settings?.onChange?.((values) => {
+    settings = { ...SETTING_DEFAULTS, ...(values ?? {}) }
+    ctx.log('settings updated', settings)
+  })
   load()
   recoverMissed()
   timer = setInterval(tick, TICK_MS)

@@ -13,5 +13,32 @@
       "icon": "Clock",
       "entry": "ui/index.html"
     }
+  ],
+  "settings": [
+    {
+      "key": "notifyOnStart",
+      "type": "boolean",
+      "label": "任务开始时通知",
+      "description": "关闭后只在执行结束（成功/失败）时发系统通知，执行开始不再打扰。",
+      "default": true
+    },
+    {
+      "key": "defaultCwd",
+      "type": "string",
+      "label": "默认工作目录",
+      "description": "任务自身没填工作目录时用它；留空则用 pi 的默认目录。",
+      "placeholder": "例如 C:\\Users\\me\\projects\\demo",
+      "default": ""
+    },
+    {
+      "key": "historyLimit",
+      "type": "number",
+      "label": "每个任务保留的运行记录",
+      "description": "超出的旧记录会被自动清理，避免历史无限膨胀。",
+      "default": 30,
+      "min": 1,
+      "max": 200,
+      "step": 1
+    }
   ]
 }

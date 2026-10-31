@@ -19,6 +19,9 @@ export type PluginPanelFrameProps = {
  *   ← { type: 'plugin-ready', panelId }                 宿主应答 hello
  *   ← { type: 'plugin-invoke-result', requestId, ok, result?, error? }
  *   ← { type: 'plugin-theme', vars: Record<string,string> }  主题 token（含自定义主题），切换/修改时重推
+ *   ← { type: 'plugin-settings', values: Record<string,unknown> }  声明式设置项的值，握手时下发一次
+ *
+ * 设置只读：写入口在设置页（宿主渲染表单）。插件 UI 拿到值后自行显示/生效即可。
  *
  * 主题契约：vars 是 `--pi-*` 名到**可直接使用**的 CSS 值的映射，插件在 documentElement
  * 上落盘后引用即可。globals.css 并存两套取值体系（shadcn 族是裸 HSL 三元组、自研族是
@@ -91,6 +94,16 @@ export function PluginPanelFrame({ pluginId, panelId, title, entry }: PluginPane
       if (data.type === 'plugin-hello') {
         frame.contentWindow?.postMessage({ type: 'plugin-ready', panelId }, '*')
         frame.contentWindow?.postMessage({ type: 'plugin-theme', vars: collectThemeVars() }, '*')
+        // 设置值按需拉一次（目录里只有 schema）；失败不阻塞面板，插件用默认值即可
+        void ipcClient
+          .invoke('plugins.settings.get', { pluginId })
+          .then((res) => {
+            frame.contentWindow?.postMessage(
+              { type: 'plugin-settings', values: (res?.values ?? {}) as Record<string, unknown> },
+              '*',
+            )
+          })
+          .catch(() => {})
         return
       }
       if (data.type === 'plugin-key') {

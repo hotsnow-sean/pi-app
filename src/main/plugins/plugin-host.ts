@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Notification, app } from 'electron'
 import { findPlugin, setPluginEnabled } from './plugin-manager'
+import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import type { PluginManifest } from '@shared/plugin-manifest'
 import { errorMessage } from '@shared/error-message'
 
@@ -96,6 +97,17 @@ function buildContext(pluginId: string) {
     storage: {
       get: (): Record<string, unknown> => readStorage(pluginId),
       set: (data: Record<string, unknown>): void => writeStorage(pluginId, data),
+    },
+    /**
+     * 声明式设置项（plugin.json 的 settings[]）的只读视图。
+     * 写入只发生在宿主侧（设置页表单 / reset），插件不直接改，避免与界面状态打架。
+     */
+    settings: {
+      get: (): Record<string, unknown> => getPluginSettings(pluginId),
+      onChange: (callback: (values: Record<string, unknown>) => void): (() => void) =>
+        onPluginSettingsChanged((changedId, values) => {
+          if (changedId === pluginId) callback(values)
+        }),
     },
     notify: (title: string, body?: string): void => {
       try {
