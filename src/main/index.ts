@@ -1,5 +1,6 @@
 import './bootstrap-path'
 import { app, shell, type BrowserWindow, dialog, session, Menu } from 'electron'
+import { registerPluginProtocolScheme } from './plugins/protocol'
 import { createWindow, getMainWindow } from './window'
 import { refreshGitWorkspaceWatch } from './git-workspace-watch'
 import { registerAllHandlers } from './ipc'
@@ -66,6 +67,9 @@ function createMenu(): void {
   Menu.setApplicationMenu(null)
 }
 
+// pi-plugin:// scheme must be registered before app ready
+registerPluginProtocolScheme()
+
 // Built-in browser: never advertise automation. Chromium sets navigator.webdriver whenever a
 // debugging/automation switch is present (e.g. a test harness); pages use it as a bot signal.
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
@@ -94,9 +98,9 @@ app.whenReady().then(() => {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': [
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com https://chatgpt.com; font-src 'self' data:"
-          ]
+            'Content-Security-Policy': [
+              "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://api.github.com https://chatgpt.com; font-src 'self' data:; frame-src pi-plugin:"
+            ]
         }
       })
     })
@@ -121,6 +125,11 @@ app.whenReady().then(() => {
     }
   }
   registerAllHandlers()
+  void import('./plugins/protocol').then((m) => m.registerPluginProtocolHandler())
+  void import('./plugins/ipc').then(async (m) => {
+    m.registerPluginHandlers()
+    await m.activateEnabledPlugins()
+  })
   void import('./clipboard-temp-images').then(({ pruneStaleClipboardImages }) => {
     try {
       pruneStaleClipboardImages()
