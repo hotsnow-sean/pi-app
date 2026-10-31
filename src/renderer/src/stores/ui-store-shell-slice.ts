@@ -3,6 +3,7 @@ import {
   CORE_RIGHT_PANEL_CATALOG,
   defaultCoreRightPanelPrefs,
 } from '@shared/right-panels'
+import { CHAT_CENTER_VIEW } from '@shared/plugin-manifest'
 import {
   DEFAULT_TIMELINE_MAX_AUTO_EXPANDED_TOOLS,
   normalizeTimelineMaxAutoExpandedTools,
@@ -30,6 +31,8 @@ type ShellSlice = Pick<
   UIState,
   | 'activePanel'
   | 'setActivePanel'
+  | 'centerView'
+  | 'setCenterView'
   | 'rightPanelCatalog'
   | 'rightPanelPrefs'
   | 'rightPanelOrder'
@@ -74,6 +77,8 @@ export function createShellSlice(set: StoreSet, get: StoreGet): ShellSlice {
               state.rightPanelOrder,
             ),
       })),
+    centerView: CHAT_CENTER_VIEW,
+    setCenterView: (next) => set({ centerView: next }),
     rightPanelPrefs: defaultCoreRightPanelPrefs(),
     rightPanelOrder: [],
     applyRightPanelRuntime: (catalog, prefs, order) =>

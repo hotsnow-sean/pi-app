@@ -2,6 +2,7 @@ import type { AdapterWidgetProjection } from '@shared/adapter-widget'
 import type { AppEvent } from '@shared/app-events'
 import type { ToolCallDetail } from '@shared/tool-call-detail'
 import type { RightPanelCatalogItem, RightPanelPrefs } from '@shared/right-panels'
+import type { CenterView } from '@shared/plugin-manifest'
 import type { WorkerLiveSnapshot } from '@renderer/lib/session-worker-sync'
 import type { SessionAttention } from '@renderer/lib/session-attention'
 import type { SubagentSessionGroup } from '@renderer/lib/subagent-session-types'
@@ -199,6 +200,12 @@ export interface UIState {
   appendComposerPrefill: (text: string) => void
   activePanel: string
   setActivePanel: (p: string) => void
+  /**
+   * 中央内容区当前内容：对话（默认）或某个插件视图。
+   * 由侧栏「应用」入口切换；打开/切换会话时自动回到 chat。
+   */
+  centerView: CenterView
+  setCenterView: (v: CenterView) => void
   rightPanelCatalog: RightPanelCatalogItem[]
   rightPanelPrefs: RightPanelPrefs
   rightPanelOrder: string[]

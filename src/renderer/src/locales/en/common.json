@@ -28,6 +28,7 @@
     "openSubagentSession": "Open {{agent}} subagent session",
     "subagentSessionUnavailable": "{{agent}} subagent session is not available yet",
     "conversations": "Conversations",
+    "apps": "Apps",
     "firstMsgIsTitle": "First message is the title",
     "projects": "Projects",
     "mainWorktree": "Main checkout",
@@ -382,5 +383,9 @@
       "turns_other": "{{count}} turns"
     },
     "focusHint": "Too narrow for all panes; shown as tabs. Change the layout here"
+  },
+  "plugins": {
+    "viewUnavailable": "This plugin view is unavailable — the plugin may be disabled",
+    "backToChat": "Back to chat"
   }
 }

@@ -3,9 +3,11 @@ import { ipcClient } from '@renderer/lib/ipc-client'
 
 export type PluginPanelFrameProps = {
   pluginId: string
-  /** 完整 panel id（plugin:<pluginId>:<panelId>），透传给插件 UI */
+  /** 完整 panel/view id（plugin:<pluginId>:<id>），透传给插件 UI */
   panelId: string
   title?: string
+  /** 入口文档，相对插件目录；右栏与中央视图共用同一份 UI 时留默认值 */
+  entry?: string
 }
 
 /**
@@ -77,7 +79,7 @@ function resolveColor(raw: string): string {
   const supported = typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', raw)
   return supported ? raw : `hsl(${raw})`
 }
-export function PluginPanelFrame({ pluginId, panelId, title }: PluginPanelFrameProps) {
+export function PluginPanelFrame({ pluginId, panelId, title, entry }: PluginPanelFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
   const handleMessage = useCallback(
@@ -89,6 +91,16 @@ export function PluginPanelFrame({ pluginId, panelId, title }: PluginPanelFrameP
       if (data.type === 'plugin-hello') {
         frame.contentWindow?.postMessage({ type: 'plugin-ready', panelId }, '*')
         frame.contentWindow?.postMessage({ type: 'plugin-theme', vars: collectThemeVars() }, '*')
+        return
+      }
+      if (data.type === 'plugin-key') {
+        // iframe 内的键盘事件宿主收不到（焦点在子文档里），由插件主动转发。
+        // 宿主 App 监听这个事件处理 Esc（回对话）与 mod+K（命令面板）。
+        window.dispatchEvent(
+          new CustomEvent('pi-desktop:plugin-key', {
+            detail: { key: String(data.key ?? ''), mod: data.mod === true },
+          }),
+        )
         return
       }
       if (data.type === 'plugin-invoke') {
@@ -157,7 +169,7 @@ export function PluginPanelFrame({ pluginId, panelId, title }: PluginPanelFrameP
         ref={iframeRef}
         className="h-full w-full border-0 bg-transparent"
         title={title ?? `plugin:${pluginId}`}
-        src={`pi-plugin://${pluginId}/ui/index.html`}
+        src={`pi-plugin://${pluginId}/${(entry ?? 'ui/index.html').replace(/^\/+/, '')}`}
         sandbox="allow-scripts allow-forms allow-modals"
       />
     </div>

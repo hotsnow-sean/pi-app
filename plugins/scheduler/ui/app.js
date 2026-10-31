@@ -39,6 +39,27 @@ function api(method, params) {
   return new Promise((resolve, reject) => waiters.set(requestId, { resolve, reject }))
 }
 
+/**
+ * 转发宿主全局快捷键：iframe 有焦点时宿主 window 收不到 keydown（子文档独立），
+ * 由插件主动上报（契约见宿主 plugin-panel-frame 的 plugin-key）。
+ * Esc = 退一级（子页 → 列表 → 回对话）；Cmd/Ctrl+K = 宿主命令面板。
+ */
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (view.name !== 'list') {
+      view = { name: 'list' }
+      render()
+      return
+    }
+    window.parent.postMessage({ type: 'plugin-key', key: 'Escape' }, '*')
+    return
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    window.parent.postMessage({ type: 'plugin-key', key: 'k', mod: true }, '*')
+  }
+})
+
 // ---------- 状态 ----------
 
 let tasks = []
