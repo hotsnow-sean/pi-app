@@ -44,6 +44,14 @@ extraResources:
     to: chrome-extension
     filter:
       - "**/*"
+  # 内置插件：打包态由 plugin-manager 读取 <resources>/plugins（asar 外，只读）。
+  # 缺这条会打出一个没有任何内置插件的安装包（定时任务等会直接消失）。
+  - from: plugins
+    to: plugins
+    filter:
+      - "**/*"
+      - "!**/node_modules/**"
+      - "!**/.git/**"
 
 win:
   target:
