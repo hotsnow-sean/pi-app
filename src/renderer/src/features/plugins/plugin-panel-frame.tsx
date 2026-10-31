@@ -18,10 +18,11 @@ export type PluginPanelFrameProps = {
  *   ← { type: 'plugin-invoke-result', requestId, ok, result?, error? }
  *   ← { type: 'plugin-theme', vars: Record<string,string> }  主题 token（含自定义主题），切换/修改时重推
  *
- * 主题契约：vars 是 `--pi-*` 名到完整 CSS 值的映射，插件在 :root 上原样落盘后引用。
- * HSL 三元组 token（Tailwind 约定）会被补全成 `hsl(...)`，十六进制 token 原样透传。
+ * 主题契约：vars 是 `--pi-*` 名到**可直接使用**的 CSS 值的映射，插件在 documentElement
+ * 上落盘后引用即可。globals.css 并存两套取值体系（shadcn 族是裸 HSL 三元组、自研族是
+ * hex），自定义主题还可能改写格式，所以这里按值实际能否作为颜色解析来判断，不假设格式。
  */
-/** HSL 三元组形式的 Tailwind token → 宿主 --pi-* 名 */
+/** shadcn 族 token：裸三元组，需要补 hsl() */
 const HSL_TOKENS = [
   'background',
   'foreground',
@@ -57,14 +58,20 @@ function collectThemeVars(): Record<string, string> {
   const cs = getComputedStyle(document.documentElement)
   const vars: Record<string, string> = {}
   for (const name of HSL_TOKENS) {
-    const v = cs.getPropertyValue(`--${name}`).trim()
-    if (v) vars[`--pi-${name}`] = `hsl(${v})`
+    const raw = cs.getPropertyValue(`--${name}`).trim()
+    if (raw) vars[`--pi-${name}`] = resolveColor(raw)
   }
   for (const name of RAW_TOKENS) {
     const v = cs.getPropertyValue(`--${name}`).trim()
     if (v) vars[`--pi-${name}`] = v
   }
   return vars
+}
+
+/** 裸 HSL 三元组补 hsl()；已是完整颜色（hex / rgb() / hsl()）则原样返回 */
+function resolveColor(raw: string): string {
+  const supported = typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', raw)
+  return supported ? raw : `hsl(${raw})`
 }
 export function PluginPanelFrame({ pluginId, panelId, title }: PluginPanelFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
@@ -114,9 +121,16 @@ export function PluginPanelFrame({ pluginId, panelId, title }: PluginPanelFrameP
   // 都会落到上述节点，统一观察后重推 token。防抖合并连续变更。
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
+    let lastSent = ''
     const push = () => {
       timer = null
-      iframeRef.current?.contentWindow?.postMessage({ type: 'plugin-theme', vars: collectThemeVars() }, '*')
+      const frame = iframeRef.current
+      if (!frame) return
+      const vars = collectThemeVars()
+      const signature = JSON.stringify(vars)
+      if (signature === lastSent) return
+      lastSent = signature
+      frame.contentWindow?.postMessage({ type: 'plugin-theme', vars }, '*')
     }
     const schedule = () => {
       if (timer) clearTimeout(timer)
