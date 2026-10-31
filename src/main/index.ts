@@ -23,6 +23,11 @@ import { isCompletionNotificationShortcut } from './completion-notification-shor
 // Prevent EPIPE / write errors from crashing the main process
 process.stdout?.on?.('error', () => {})
 process.stderr?.on?.('error', () => {})
+
+// 开发期调试端口：仅在非打包且显式指定端口时开启（用于插件面板/iframe 的 CDP 检查）
+if (!app.isPackaged && process.env.PI_DEVTOOLS_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.PI_DEVTOOLS_PORT)
+}
 process.on('uncaughtException', (err) => {
   const code = (err as NodeJS.ErrnoException)?.code
   if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') return

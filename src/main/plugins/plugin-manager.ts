@@ -28,6 +28,9 @@ export type DiscoveredPlugin = {
 
 function pluginRoots(): string[] {
   const roots: string[] = []
+  // 显式覆盖（e2e / 自定义安装位置）；优先级最高
+  const override = process.env.PI_PLUGINS_DIR?.trim()
+  if (override) roots.push(override)
   if (app.isPackaged) {
     // app.getAppPath() = .../app.asar；内置插件随 extraResources 放到 resources/plugins
     roots.push(path.join(path.dirname(app.getAppPath()), 'plugins'))

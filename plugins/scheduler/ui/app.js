@@ -8,6 +8,10 @@ const waiters = new Map()
 window.addEventListener('message', (event) => {
   const data = event.data
   if (!data || typeof data !== 'object') return
+  if (data.type === 'plugin-theme') {
+    applyTheme(data.vars)
+    return
+  }
   if (data.type === 'plugin-invoke-result') {
     const waiter = waiters.get(data.requestId)
     if (!waiter) return
@@ -16,6 +20,18 @@ window.addEventListener('message', (event) => {
     else waiter.reject(new Error(data.error || 'invoke failed'))
   }
 })
+
+/**
+ * 应用宿主主题：vars 是 `--pi-*` → 完整 CSS 值的映射（见宿主 plugin-panel-frame 主题契约）。
+ * 落到 documentElement 行内样式，优先级高于 style.css 的 :root 兜底值。
+ */
+function applyTheme(vars) {
+  if (!vars || typeof vars !== 'object') return
+  const root = document.documentElement
+  for (const [name, value] of Object.entries(vars)) {
+    if (typeof value === 'string' && value) root.style.setProperty(name, value)
+  }
+}
 
 function api(method, params) {
   const requestId = ++invokeSeq
