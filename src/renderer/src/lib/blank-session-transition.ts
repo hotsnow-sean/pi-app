@@ -3,6 +3,7 @@ import { ipcClient } from '@renderer/lib/ipc-client'
 import { reportVisibleSession } from '@renderer/lib/visible-session-report'
 import { beginSessionNavigation } from '@renderer/lib/session-navigation'
 import { clearSessionFocus } from '@renderer/lib/session-shell'
+import { revealConversation } from '@renderer/lib/reveal-conversation'
 import { EPHEMERAL_DRAFT_SESSION_ID, PENDING_NEW_SESSION_ID } from '@renderer/lib/session-ids'
 import { useExtensionUIStore } from '@renderer/stores/extension-ui-store'
 import { useUIStore } from '@renderer/stores/ui-store'
@@ -67,6 +68,8 @@ export function resetBlankSessionProjection(): void {
 }
 
 export function enterBlankSession(kind: BlankSessionKind): void {
+  // 「新对话」同样是"我要看对话"的意图：已经在空白会话里时状态不变，视图仍需让位（见 revealConversation）
+  revealConversation()
   beginSessionNavigation()
   leaveVisibleSession()
   useUIStore.setState((state) => ({

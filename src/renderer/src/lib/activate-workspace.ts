@@ -14,6 +14,7 @@ import { isSubagentSessionPreview } from '@renderer/lib/subagent-session-preview
 import { enterBlankSession, resetBlankSessionProjection } from '@renderer/lib/blank-session-transition'
 import { loadWorkspaceSessionList } from '@renderer/lib/refresh-workspace-session-lists'
 import { workspacePathsEqual } from '@shared/workspace-path'
+import { revealConversation } from '@renderer/lib/reveal-conversation'
 
 export type ActivateWorkspaceOptions = {
   preferHome?: boolean
@@ -25,6 +26,8 @@ export type ActivateWorkspaceOptions = {
  * 切换工作区：先更新 UI，workspace.open 在后台；快切用 navToken 丢弃过期结果。
  */
 export async function activateWorkspace(path: string, options?: ActivateWorkspaceOptions): Promise<void> {
+  // 点了左栏的项目/会话，就是要看对话：即使目标与当前一致，也要把应用视图让位（见 revealConversation）
+  revealConversation()
   const leavingWorkspace = useUIStore.getState().currentWorkspace
   if (
     !options?.preferHome &&
@@ -164,6 +167,9 @@ export async function activateWorkspace(path: string, options?: ActivateWorkspac
 /** 同项目内切会话 */
 export async function switchSessionInPlace(sessionId: string, sessionFile?: string): Promise<void> {
   const store = useUIStore.getState()
+  // 早退分支（同一会话）不会引起会话身份变化，宿主的"切会话自动回对话"效应也就不会触发，
+  // 所以这里必须先把视图拉回来，否则在应用视图里点当前会话毫无反应。
+  revealConversation()
   store.clearPendingNewSessionPlaceholder()
 
   if (sessionId === PENDING_NEW_SESSION_ID) {
@@ -218,6 +224,7 @@ export async function previewSessionInPlace(
 ): Promise<void> {
   if (!assertSessionNavigation(navToken)) return
   const store = useUIStore.getState()
+  revealConversation()
   store.clearPendingNewSessionPlaceholder()
 
   captureVisibleLiveSessionTimeline()

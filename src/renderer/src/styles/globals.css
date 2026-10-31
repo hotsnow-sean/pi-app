@@ -716,6 +716,23 @@
   .nav-row-active.nav-row {
     font-weight: 500;
   }
+  /* 应用视图占着中央区时，会话行不再是"你正在看的"，而是"点一下会回到这里"：
+     实心填充交给应用入口（否则左栏两个实心行，分不清点哪个能回对话），会话行留一条竖标记。 */
+  [data-center='plugin'] .nav-row-active:not([data-plugin-view]) {
+    background-color: transparent !important;
+  }
+  [data-center='plugin'] .nav-row-active:not([data-plugin-view])::before {
+    content: '';
+    position: absolute;
+    left: 1px;
+    top: 50%;
+    width: 2px;
+    height: 15px;
+    border-radius: 999px;
+    background: var(--brand);
+    opacity: 0.85;
+    transform: translateY(-50%);
+  }
   /* 列表行（div role=button）的可见焦点态，与右键菜单条目一致 */
   .nav-focus-ring:focus-visible {
     outline: none;
