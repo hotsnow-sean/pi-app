@@ -14,7 +14,7 @@ import {
   type AppIconName,
 } from '@renderer/components/icons'
 import { cn } from '@renderer/lib/utils'
-import { resolveAdapterForTool } from './tool-card-registry'
+import { resolveToolCardDef } from './tool-card-registry'
 import { isMcpToolName } from './mcp-tool'
 
 const BUILTIN_ICON: Record<string, AppIconComponent> = {
@@ -31,16 +31,16 @@ const BUILTIN_ICON: Record<string, AppIconComponent> = {
 }
 
 export function resolveToolIconName(name: string): AppIconName {
-  const adapterName = resolveAdapterForTool(name)?.toolCard?.icon
-  return normalizeLegacyIconName(adapterName) ?? 'wrench'
+  const declared = resolveToolCardDef(name)?.icon
+  return normalizeLegacyIconName(declared) ?? 'wrench'
 }
 
 function ToolIconImpl({ name, className }: { name: string; className?: string }) {
   const cls = className || 'h-3.5 w-3.5 timeline-text-quiet'
   const Builtin = BUILTIN_ICON[name]
-  const adapterIcon = resolveAdapterForTool(name)?.toolCard?.icon
+  const declaredIcon = resolveToolCardDef(name)?.icon
   const Icon =
-    Builtin ?? (!adapterIcon && isMcpToolName(name) ? Plug : resolveAppIcon(resolveToolIconName(name))) ?? Wrench
+    Builtin ?? (!declaredIcon && isMcpToolName(name) ? Plug : resolveAppIcon(resolveToolIconName(name))) ?? Wrench
   return <Icon className={cn(cls, 'text-current')} />
 }
 

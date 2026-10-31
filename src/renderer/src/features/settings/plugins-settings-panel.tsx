@@ -39,6 +39,7 @@ type PluginRow = {
   dir: string
   views: { id: string; title: string; description?: string }[]
   panels: { id: string; title: string }[]
+  tools?: { name: string; label: string }[]
   settings: PluginSettingField[]
 }
 
@@ -403,10 +404,18 @@ export function PluginsSettings() {
           </SettingsSection>
 
           <SettingsSection title={t('settings:plugins.capabilities')} description={t('settings:plugins.capabilitiesDesc')}>
-            {selected.views.length === 0 && selected.panels.length === 0 ? (
+            {selected.views.length === 0 && selected.panels.length === 0 && (selected.tools ?? []).length === 0 ? (
               <div className="settings-row text-[12.5px] text-foreground-secondary">{t('settings:plugins.noCapabilities')}</div>
             ) : (
               <div className="settings-row flex flex-wrap gap-1.5">
+                {(selected.tools ?? []).map((tool) => (
+                  <span
+                    key={`tool-${tool.name}`}
+                    className="rounded bg-muted/60 px-1.5 py-0.5 text-2xs text-foreground-secondary"
+                  >
+                    {t('settings:plugins.capTool')} · {tool.label || tool.name}
+                  </span>
+                ))}
                 {selected.views.map((view) => (
                   <span
                     key={`view-${view.id}`}

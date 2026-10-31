@@ -1,0 +1,97 @@
+{
+  "id": "ask",
+  "name": "提问台",
+  "version": "0.1.0",
+  "description": "让 agent 在会话中间向你提问：结构化选项、可选自定义回答，答完自动继续。",
+  "icon": "MessageCircleQuestion",
+  "main": "main.mjs",
+  "views": [
+    {
+      "id": "main",
+      "title": "提问台",
+      "description": "agent 问过你什么、你回答了什么",
+      "icon": "MessageCircleQuestion"
+    }
+  ],
+  "tools": [
+    {
+      "name": "ask_user",
+      "label": "向你提问",
+      "description": "Ask the user structured questions and wait for the answers. Use it when a decision, preference, or missing detail blocks progress: unclear requirements, a risky irreversible step, or several reasonable options. Prefer asking over guessing. Keep it to the questions you actually need, 1-4 is usually enough.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Questions to ask, in order.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string",
+                  "description": "The question itself, one sentence, concrete."
+                },
+                "header": {
+                  "type": "string",
+                  "description": "Very short label shown above the question (2-6 chars), e.g. 数据库 / 部署方式."
+                },
+                "multiSelect": {
+                  "type": "boolean",
+                  "description": "Allow selecting several options at once."
+                },
+                "options": {
+                  "type": "array",
+                  "minItems": 2,
+                  "description": "2-8 concrete choices. The user can always type a custom answer instead.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": { "type": "string", "description": "Short option label." },
+                      "description": { "type": "string", "description": "One line explaining the trade-off." }
+                    },
+                    "required": ["label"]
+                  }
+                }
+              },
+              "required": ["question", "options"]
+            }
+          }
+        },
+        "required": ["questions"]
+      },
+      "card": {
+        "template": "kv",
+        "icon": "MessageCircleQuestion"
+      }
+    }
+  ],
+  "settings": [
+    {
+      "key": "timeoutSec",
+      "type": "number",
+      "label": "等待回答的最长时间（秒）",
+      "description": "超时按「未回答」继续；0 表示一直等，直到你作答或取消。",
+      "default": 600,
+      "min": 0,
+      "max": 7200,
+      "step": 30
+    },
+    {
+      "key": "recordHistory",
+      "type": "boolean",
+      "label": "在提问台保留记录",
+      "description": "关闭后只影响历史列表，提问本身照常工作。",
+      "default": true
+    },
+    {
+      "key": "historyLimit",
+      "type": "number",
+      "label": "最多保留多少条记录",
+      "default": 50,
+      "min": 5,
+      "max": 500,
+      "step": 5
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import { readRemoteAttachment, writeClipboardTempImage } from '../../clipboard-t
 import { capabilityCatalog, capabilitySectionMap, capabilityToolFamilies } from '../../capabilities/catalog'
 import { clipboardReadTempImageSchema, clipboardWriteTempImageSchema, promptTextSchema } from '../schemas'
 import { noteBrowserTarget } from '../../browser/targets'
+import { pluginToolDescriptors } from '../../plugins/plugin-tools'
 
 /** Matches the composer's paste limit, so a re-read can never return more than was written. */
 const CLIPBOARD_READ_IMAGE_MAX_BYTES = 8 * 1024 * 1024
@@ -43,11 +44,24 @@ export function registerPromptHandlers(): void {
     await workerManager.setCapabilities(capabilitySectionMap(req.capabilities), capabilityToolFamilies(req.capabilities), req.sessionFile)
   }
 
+  /**
+   * 插件工具目录也随每次 prompt 下发：插件启停后不需要重启 worker，
+   * 下一轮模型看到的工具列表就是最新的。失败不影响正常对话。
+   */
+  const applyPluginTools = async (sessionFile?: string) => {
+    try {
+      await workerManager.setPluginTools(pluginToolDescriptors(), sessionFile)
+    } catch (error) {
+      console.warn('[plugins] setPluginTools failed:', error)
+    }
+  }
+
   registerHandler('ipc:capabilities.catalog', async () => ({ capabilities: capabilityCatalog() }))
 
   registerHandlerWithSchema('ipc:prompt.send', promptTextSchema, async (req) => {
     const bind = await bindBeforePrompt(req.sessionFile)
     await applyCapabilities(req)
+    await applyPluginTools(req.sessionFile)
     await workerManager.sendPrompt(req.text, req.sessionFile)
     // Keep clipboard images on disk for the agent turn (tools like `read` use the path).
     // Cleanup is TTL/startup prune + optional quit, not immediate delete-on-send.
