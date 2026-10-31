@@ -29,6 +29,8 @@ export interface StoreSchema {
   /** Desktop-only skill alias/icon, keyed by skillCatalogKey */
   skillPresentation: Record<string, { alias?: string; icon?: string }>
   extensionConfigs: Record<string, Record<string, unknown>>
+  /** 应用级插件启用状态：key = plugin id，false = 禁用，缺省 = 启用 */
+  pluginEnabled: Record<string, boolean>
   /** 右侧栏 Tab 显示开关 */
   rightPanelPrefs: Record<string, boolean>
   /** 右侧栏 Tab 顺序（panel id 列表） */
@@ -111,6 +113,7 @@ const store = new Store<StoreSchema>({
     skillOverrides: {},
     skillPresentation: {},
     extensionConfigs: {},
+    pluginEnabled: {},
     rightPanelPrefs: {
       review: true,
       'adapter:trellis': true,
