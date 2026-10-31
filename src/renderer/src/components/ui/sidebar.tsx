@@ -8,7 +8,14 @@ interface SidebarProps {
 
 /** 宽度与收起动画由 MainLayoutShell 的 Grid 轨道负责 */
 export function Sidebar({ children }: SidebarProps) {
-  return <div className="flex h-full min-h-0 min-w-0 flex-col">{children}</div>
+  // 中央区被应用视图占用时，左栏只能有一个"实心选中项"（应用自己）：
+  // 会话行退回"我会回到这里"的轻标记（样式见 globals.css 的 data-center 规则）。
+  const centerKind = useUIStore((s) => s.centerView.kind)
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-center={centerKind}>
+      {children}
+    </div>
+  )
 }
 
 export function SidebarHeader({ label }: { label: string }) {

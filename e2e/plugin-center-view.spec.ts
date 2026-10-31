@@ -46,3 +46,38 @@ test('plugin view opens in the center column and toggles back', async () => {
     await agent.app.close()
   }
 })
+
+/**
+ * 回归：应用视图占用中央区时，点当前会话必须回到对话。
+ * 之前 switchSessionInPlace 对"就是当前会话"早退，且会话行与应用入口同时高亮，
+ * 用户点了高亮会话毫无反应。revealConversation 保证"打开会话"是幂等意图。
+ */
+test('clicking the current session returns to chat while a plugin view is open', async () => {
+  test.setTimeout(120_000)
+  process.env.PI_PLUGINS_DIR = path.resolve('plugins')
+  const model = startScriptedModel(() => ({ text: 'ok' }), [])
+  const port = await listen(model)
+  const agent = await launchAgentApp(port, { language: 'zh' })
+  const { win } = agent
+  try {
+    // 造一个真实会话，让它出现在侧栏项目树里
+    await agent.newSession()
+    await agent.send('hello')
+    const row = win.locator('[data-session-file]').first()
+    await expect(row).toBeVisible({ timeout: 30_000 })
+
+    // 基线：在对话视图里点已选中的会话行，留在对话
+    await row.locator('button').first().click()
+    await expect(win.locator('.composer-dock-host')).toHaveCount(1)
+
+    // 打开应用视图后，点同一个（仍然高亮的）会话行 → 必须回到对话
+    await win.click('[data-plugin-view="ask:main"]')
+    await expect(win.locator('[data-plugin-center="ask"]')).toBeVisible({ timeout: 10_000 })
+    await expect(win.locator('.composer-dock-host')).toHaveCount(0)
+    await row.locator('button').first().click()
+    await expect(win.locator('[data-plugin-center="ask"]')).toHaveCount(0)
+    await expect(win.locator('.composer-dock-host')).toHaveCount(1)
+  } finally {
+    await agent.close()
+  }
+})
