@@ -50,6 +50,22 @@ test('scheduler form adapts to schedule kind and saves interval tasks', async ()
     await frame.locator('#btn-save').click()
     await expect(frame.locator('.card').filter({ hasText: 'e2e 间隔任务' })).toBeVisible({ timeout: 10_000 })
     await expect(frame.locator('.card').filter({ hasText: '每隔 30 分钟' })).toBeVisible()
+
+    // 立即运行 → 运行记录页出现记录 → 展开看到 agent 的回复文本（真实 SDK 会话，模型为 scripted mock）
+    const card = frame.locator('.card').filter({ hasText: 'e2e 间隔任务' })
+    await card.locator('.act-run').click()
+    await frame.locator('#nav-runs').click()
+    const row = frame.locator('.run-row').first()
+    await expect(row).toBeVisible({ timeout: 60_000 })
+    await expect(row.locator('.run-status.ok')).toBeVisible({ timeout: 60_000 })
+    await row.locator('.run-line').click()
+    await expect(frame.locator('.run-result')).toContainText('ok', { timeout: 10_000 })
+
+    // 卡片上的上次运行状态与记录入口
+    await frame.locator('#nav-tasks').click()
+    await expect(card.locator('.last-run.ok')).toBeVisible()
+    await card.locator('.act-history').click()
+    await expect(frame.locator('.run')).toBeVisible()
   } finally {
     await agent.app.close()
   }

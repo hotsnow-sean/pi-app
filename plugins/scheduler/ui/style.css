@@ -107,3 +107,45 @@ body {
   border: none; background: transparent; color: var(--accent); cursor: pointer;
   font-size: 13px; padding: 0; font-family: inherit;
 }
+
+/* ---------- 顶部导航（定时任务 / 运行记录） ---------- */
+.head-nav { display: flex; align-items: baseline; gap: 14px; }
+.nav-item {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 15px; font-weight: 600; color: var(--text-2); font-family: inherit;
+}
+.nav-item:hover { color: var(--text); }
+.nav-item.active { color: var(--text); }
+
+/* ---------- 卡片上的上次运行状态 ---------- */
+.last-run { font-size: 12px; }
+.last-run.ok { color: var(--ok); }
+.last-run.err { color: var(--err); }
+
+/* ---------- 运行记录列表 ---------- */
+.run-row {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 8px; overflow: hidden;
+}
+.run-row.expanded { border-color: var(--accent-border); }
+.run-line {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  cursor: pointer; font-size: 13px; min-width: 0;
+}
+.run-line:hover { background: var(--accent-weak); }
+.run-status-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.run-status-dot.ok { background: var(--ok); }
+.run-status-dot.err { background: var(--err); }
+.run-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.run-status { flex: none; font-size: 12px; }
+.run-status.ok { color: var(--ok); }
+.run-status.err { color: var(--err); }
+.run-when { color: var(--text-2); font-size: 12px; flex: none; }
+.run-dur { color: var(--text-2); font-size: 12px; flex: none; }
+.run-missed { color: var(--text-2); font-size: 12px; flex: none; border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; }
+.run-line .act-del-run { margin-left: auto; flex: none; }
+.run-result {
+  border-top: 1px solid var(--border); padding: 10px 12px;
+  font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow-y: auto; color: var(--text); background: var(--bg);
+}

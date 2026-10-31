@@ -43,11 +43,13 @@ function api(method, params) {
 
 let tasks = []
 let serverNow = Date.now()
-let view = { name: 'list' } // list | edit | detail
+let view = { name: 'list' } // list | edit | detail | runs
 let tab = 'all' // all | enabled | disabled
 let editingTask = null
 let detailTaskId = null
 let runs = []
+let expandedRunId = null // 运行记录页当前展开查看结果的行
+let lastRunsSig = '' // 运行记录页轮询去重：数据没变不重绘，避免打断阅读/选中
 let refreshTimer = null
 
 const $app = document.getElementById('app')
@@ -102,11 +104,43 @@ function fmtDuration(ms) {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
+function fmtRelative(ts) {
+  const diff = serverNow - ts
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  return `${Math.floor(diff / 86_400_000)} 天前`
+}
+
+/** 顶部导航：定时任务 / 运行记录（对齐 WorkBuddy 的两个一级页签） */
+function headNav(active) {
+  return `
+    <div class="head-nav">
+      <button class="nav-item ${active === 'tasks' ? 'active' : ''}" id="nav-tasks">定时任务</button>
+      <button class="nav-item ${active === 'runs' ? 'active' : ''}" id="nav-runs">运行记录</button>
+    </div>
+  `
+}
+
+function bindHeadNav() {
+  $app.querySelector('#nav-tasks')?.addEventListener('click', () => {
+    view = { name: 'list' }
+    render()
+  })
+  $app.querySelector('#nav-runs')?.addEventListener('click', async () => {
+    view = { name: 'runs' }
+    expandedRunId = null
+    await refresh()
+    render()
+  })
+}
+
 // ---------- 渲染 ----------
 
 function render() {
   if (view.name === 'edit') renderEdit()
   else if (view.name === 'detail') renderDetail()
+  else if (view.name === 'runs') renderRuns()
   else renderList()
 }
 
@@ -115,7 +149,7 @@ function renderList() {
   const count = (f) => tasks.filter(f).length
   const html = `
     <div class="head">
-      <h1>定时任务</h1>
+      ${headNav('tasks')}
       <button class="btn" id="btn-new">＋ 新建</button>
     </div>
     <div class="tabs">
@@ -126,17 +160,22 @@ function renderList() {
     <div id="task-list"></div>
   `
   $app.replaceChildren(h(html))
+  bindHeadNav()
   const list = $app.querySelector('#task-list')
   if (filtered.length === 0) {
     list.append(h(`<div class="empty">还没有定时任务<br/>点击右上角「新建」创建一个</div>`))
   }
   for (const t of filtered) {
     const countdown = t.enabled ? fmtCountdown(t.nextRunAt) : null
+    const lastRun = t.lastRunAt
+      ? `<span class="last-run ${t.lastRunOk === false ? 'err' : 'ok'}">${t.lastRunOk === false ? '上次失败' : '上次成功'} · ${fmtRelative(t.lastRunAt)}</span>`
+      : ''
     const card = h(`
       <div class="card" data-id="${t.id}">
         <div class="card-head">
           <span class="card-title" title="${esc(t.name)}">${esc(t.name)}</span>
           <button class="icon-btn act-run" title="立即运行">${ICONS.play}</button>
+          <button class="icon-btn act-history" title="运行记录">${ICONS.clock}</button>
           <button class="icon-btn act-edit" title="编辑">${ICONS.edit}</button>
           <button class="icon-btn act-delete" title="删除">${ICONS.trash}</button>
           <label class="switch"><input type="checkbox" class="act-toggle" ${t.enabled ? 'checked' : ''}/><span class="track"></span></label>
@@ -144,6 +183,7 @@ function renderList() {
         <div class="card-desc">${esc(t.prompt) || '<span style="opacity:.5">（无提示词）</span>'}</div>
         <div class="card-foot">
           <span>${esc(t.scheduleLabel)}</span>
+          ${lastRun}
           ${t.enabled
             ? countdown
               ? `<span class="next">${esc(countdown)}</span>`
@@ -153,6 +193,7 @@ function renderList() {
       </div>
     `)
     card.querySelector('.card-title').addEventListener('click', () => openDetail(t.id))
+    card.querySelector('.act-history').addEventListener('click', () => openDetail(t.id))
     card.querySelector('.act-run').addEventListener('click', () => runNow(t))
     card.querySelector('.act-edit').addEventListener('click', () => openEdit(t))
     card.querySelector('.act-delete').addEventListener('click', () => deleteTask(t))
@@ -360,6 +401,55 @@ function renderDetail() {
   }
 }
 
+/** 运行记录总览（对齐 WorkBuddy：全部任务的执行流水，点行展开看结果） */
+function renderRuns() {
+  const html = `
+    <div class="head">
+      ${headNav('runs')}
+      <span></span>
+    </div>
+    <div id="runs-list"></div>
+  `
+  $app.replaceChildren(h(html))
+  bindHeadNav()
+  const list = $app.querySelector('#runs-list')
+  if (runs.length === 0) {
+    list.append(h(`<div class="empty">还没有运行记录<br/>任务到点执行或手动运行后，记录会出现在这里</div>`))
+    return
+  }
+  for (const r of runs) {
+    const expanded = expandedRunId === r.id
+    const status = r.ok ? '<span class="run-status ok">成功</span>' : '<span class="run-status err">失败</span>'
+    const row = h(`
+      <div class="run-row" data-id="${r.id}">
+        <div class="run-line">
+          <span class="run-status-dot ${r.ok ? 'ok' : 'err'}"></span>
+          <span class="run-name" title="${esc(r.taskName)}">${esc(r.taskName)}</span>
+          ${status}
+          <span class="run-when">${fmtRelative(r.startedAt)}</span>
+          <span class="run-dur">${fmtDuration(r.durationMs)}</span>
+          ${r.missed ? '<span class="run-missed">补跑</span>' : ''}
+          <button class="icon-btn act-del-run" title="删除记录">${ICONS.trash}</button>
+        </div>
+        ${expanded
+          ? `<div class="run-result">${r.resultText ? esc(r.resultText) : r.error ? esc(r.error) : '<span style="opacity:.5">（无输出）</span>'}</div>`
+          : ''}
+      </div>
+    `)
+    row.querySelector('.run-line').addEventListener('click', (e) => {
+      if (e.target.closest('.act-del-run')) return
+      expandedRunId = expanded ? null : r.id
+      render()
+    })
+    row.querySelector('.act-del-run').addEventListener('click', async () => {
+      await api('deleteRun', { id: r.id })
+      await refresh()
+      render()
+    })
+    list.append(row)
+  }
+}
+
 // ---------- 动作 ----------
 
 async function refresh() {
@@ -369,7 +459,14 @@ async function refresh() {
   if (view.name === 'detail' && detailTaskId) {
     const data2 = await api('listRuns', { taskId: detailTaskId, limit: 50 })
     runs = data2.runs ?? []
+  } else if (view.name === 'runs') {
+    const data2 = await api('listRuns', { limit: 200 })
+    runs = data2.runs ?? []
   }
+}
+
+function runsSignature() {
+  return JSON.stringify(runs.map((r) => [r.id, r.ok, r.resultText.length]))
 }
 
 function openEdit(task) {
@@ -414,6 +511,15 @@ async function boot() {
   refreshTimer = setInterval(async () => {
     try {
       await refresh()
+      if (view.name === 'runs') {
+        // 数据没变化就不重绘，避免阅读结果时每 5 秒被打断
+        const sig = runsSignature()
+        if (sig !== lastRunsSig) {
+          lastRunsSig = sig
+          render()
+        }
+        return
+      }
       if (view.name === 'list' || view.name === 'detail') render()
     } catch {
       /* 面板短暂失联时静默重试 */
