@@ -30,6 +30,10 @@ import { RightPanelTabs } from '@renderer/features/shell/right-panel-tabs'
 import { loadNormalizedRightPanelPrefs } from '@renderer/lib/right-panel-runtime'
 import { normalizeTimelineMaxAutoExpandedTools, normalizeTimelineVisibleTurns } from '@shared/timeline-settings'
 import { SidePanelHost } from '@renderer/features/side-panels/side-panel-host'
+import { PluginSidebarNav } from '@renderer/features/plugins/plugin-sidebar-nav'
+import { PluginCenterView } from '@renderer/features/plugins/plugin-center-view'
+import { usePluginViews } from '@renderer/features/plugins/use-plugin-views'
+import { CHAT_CENTER_VIEW } from '@shared/plugin-manifest'
 import { ExtensionUIHost } from '@renderer/features/extension-ui/extension-ui-host'
 import { AppToaster } from '@renderer/components/app/app-toaster'
 import { markExtensionNotifyAppReady } from '@renderer/lib/extension-notify-policy'
@@ -101,6 +105,13 @@ export default function App() {
   const modelPickerOpen = useUIStore((s) => s.modelPickerOpen)
   const thinkingPickerOpen = useUIStore((s) => s.thinkingPickerOpen)
   const setActivePanel = useUIStore((s) => s.setActivePanel)
+  // 中央内容区：对话 或 某个插件视图（侧栏「应用」入口切换）
+  const centerView = useUIStore((s) => s.centerView)
+  const pluginViews = usePluginViews()
+  const inPluginView = centerView.kind === 'plugin'
+  const activePluginView = inPluginView
+    ? pluginViews.find((v) => v.pluginId === centerView.pluginId && v.id === centerView.viewId)
+    : undefined
   const rightPanelPrefs = useUIStore((s) => s.rightPanelPrefs)
   const rightPanelOrder = useUIStore((s) => s.rightPanelOrder)
   const applyRightPanelRuntime = useUIStore((s) => s.applyRightPanelRuntime)
@@ -170,6 +181,22 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // iframe 内的键盘事件宿主收不到，插件转发（见 PluginPanelFrame 的 plugin-key 契约）。
+  // 只处理两个"全局但不该被面板吞掉"的键：Esc 退出插件视图、Cmd/Ctrl+K 打开命令面板。
+  useEffect(() => {
+    const onPluginKey = (event: Event) => {
+      const detail = (event as CustomEvent<{ key?: string; mod?: boolean }>).detail
+      if (!detail?.key) return
+      if (detail.key === 'Escape') {
+        useUIStore.getState().setCenterView(CHAT_CENTER_VIEW)
+      } else if (detail.mod && detail.key.toLowerCase() === 'k') {
+        setCommandPaletteOpen(true)
+      }
+    }
+    window.addEventListener('pi-desktop:plugin-key', onPluginKey)
+    return () => window.removeEventListener('pi-desktop:plugin-key', onPluginKey)
   }, [])
 
   useEffect(() => {
@@ -304,6 +331,21 @@ export default function App() {
   const timelineItemCount = useUIStore((s) => s.timelineItems.length)
   const historyLoading = useUIStore((s) => s.historyLoading)
 
+  /**
+   * 切换会话/工作区时自动回到对话：插件视图是"当前工作区之外的另一个页面"，
+   * 用户在左栏点了某个会话，期望看到的是那个会话，而不是还停在插件里。
+   * 用 ref 记录上一次的会话身份，只在真正变化时触发（避免挂载即切）。
+   */
+  const sessionIdentityRef = useRef(`${currentWorkspace}|${currentSessionId}|${ephemeralSandboxDraft}`)
+  useEffect(() => {
+    const identity = `${currentWorkspace}|${currentSessionId}|${ephemeralSandboxDraft}`
+    if (identity === sessionIdentityRef.current) return
+    sessionIdentityRef.current = identity
+    if (useUIStore.getState().centerView.kind !== 'chat') {
+      useUIStore.getState().setCenterView(CHAT_CENTER_VIEW)
+    }
+  }, [currentWorkspace, currentSessionId, ephemeralSandboxDraft])
+
   const handleOpenProject = async () => {
     if (!window.piDesktop) {
       console.error('piDesktop not available')
@@ -388,10 +430,12 @@ export default function App() {
         className="app-viewport flex flex-col overflow-hidden text-foreground"
         style={{ background: 'var(--surface-sidebar)' }}
       >
-        <ImmersiveChrome projectName={projectName} />
+        <ImmersiveChrome projectName={inPluginView ? (activePluginView?.title ?? projectName) : projectName} />
         <MainLayoutShell
           left={
             <Sidebar>
+              {/* 插件中央视图入口：固定在滚动区之外，永远可见 */}
+              <PluginSidebarNav />
               <SidebarContent>
                 <ProjectSidebar
                   onOpenProject={handleOpenProject}
@@ -408,6 +452,13 @@ export default function App() {
             </Sidebar>
           }
           center={
+            inPluginView ? (
+              <ErrorBoundary label="plugin-view">
+                <Suspense fallback={<ShellSuspenseFallback label={t('common:loading')} />}>
+                  <PluginCenterView pluginId={centerView.pluginId} viewId={centerView.viewId} />
+                </Suspense>
+              </ErrorBoundary>
+            ) : (
             <SplitView>
             <MainColumnWithTimelineScroll className="h-full">
               {showHome ? (
@@ -436,6 +487,7 @@ export default function App() {
               {!showHome ? <TimelineScrubber /> : null}
             </MainColumnWithTimelineScroll>
             </SplitView>
+            )
           }
           right={
             <RightPanel>

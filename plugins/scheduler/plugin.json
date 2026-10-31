@@ -2,17 +2,26 @@
   "id": "scheduler",
   "name": "定时任务",
   "version": "0.1.0",
-  "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月，支持有效期、启停、立即运行与执行历史。",
-  "icon": "AlarmClock",
+  "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月 / 间隔，支持有效期、启停、立即运行与执行历史。",
+  "icon": "Clock",
   "main": "main.mjs",
   "panels": [
     {
       "id": "tasks",
       "title": "定时任务",
       "description": "创建与管理定时任务，查看执行历史",
-      "icon": "AlarmClock",
+      "icon": "Clock",
       "entry": "ui/index.html",
       "defaultEnabled": true
+    }
+  ],
+  "views": [
+    {
+      "id": "main",
+      "title": "定时任务",
+      "description": "中央工作区：任务列表、新建/编辑、运行记录",
+      "icon": "Clock",
+      "entry": "ui/index.html"
     }
   ]
 }

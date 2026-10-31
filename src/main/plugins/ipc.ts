@@ -44,6 +44,14 @@ export function registerPluginHandlers(): void {
         icon: p.manifest?.icon ?? '',
         enabled: p.enabled,
         error: p.error,
+        // 中央视图贡献点：侧栏入口与中央面板都由 renderer 按此渲染
+        views: (p.manifest?.views ?? []).map((v) => ({
+          id: v.id,
+          title: v.title,
+          description: v.description ?? '',
+          icon: v.icon ?? p.manifest?.icon ?? '',
+          entry: v.entry,
+        })),
       })),
     }
   })

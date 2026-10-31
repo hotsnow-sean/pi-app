@@ -28,6 +28,7 @@
     "openSubagentSession": "打开 {{agent}} 子 Agent 会话",
     "subagentSessionUnavailable": "{{agent}} 子 Agent 会话暂不可查看",
     "conversations": "对话",
+    "apps": "应用",
     "firstMsgIsTitle": "首条消息即标题",
     "projects": "项目",
     "mainWorktree": "主目录",
@@ -359,5 +360,9 @@
       "turns": "{{count}} 轮"
     },
     "focusHint": "窗口太窄，暂以标签显示；可在此切换布局"
+  },
+  "plugins": {
+    "viewUnavailable": "该插件视图当前不可用（插件可能已停用）",
+    "backToChat": "返回对话"
   }
 }
