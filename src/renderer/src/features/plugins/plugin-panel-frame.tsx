@@ -65,6 +65,10 @@ function collectThemeVars(): Record<string, string> {
     const v = cs.getPropertyValue(`--${name}`).trim()
     if (v) vars[`--pi-${name}`] = v
   }
+  // 原生控件（时间/日期选择器的图标与弹层、select 下拉、滚动条）由浏览器绘制，
+  // 只认 color-scheme，不认自定义变量 —— 必须显式传递，否则永远是亮色。
+  const scheme = cs.colorScheme?.trim()
+  vars['--pi-color-scheme'] = scheme && scheme !== 'normal' ? scheme : document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   return vars
 }
 
