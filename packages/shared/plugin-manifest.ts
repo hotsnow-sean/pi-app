@@ -24,6 +24,26 @@ export const pluginPanelContributionSchema = z.object({
 
 export type PluginPanelContribution = z.infer<typeof pluginPanelContributionSchema>
 
+/**
+ * 中央视图贡献点（侧栏入口 + 中央内容区）。
+ *
+ * 与 panels 的区别是**落点**而非能力：panels 落在右栏（窄，旁注性质），views 落在中央
+ * （整块工作区，插件自建导航/列表/详情）。同一份 ui/index.html 可以两处都用——宿主不
+ * 强制布局，插件按自身宽度自适应即可。
+ */
+export const pluginViewContributionSchema = z.object({
+  /** 视图短 id（插件内唯一）；完整 id = `plugin:<pluginId>:<viewId>` */
+  id: z.string().regex(PLUGIN_ID_PATTERN, 'view id must be lowercase alphanumeric/dash'),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  /** lucide 图标名（复用宿主 resolveAppIcon） */
+  icon: z.string().optional(),
+  /** 中央区入口 HTML，相对插件目录，默认 ui/index.html */
+  entry: z.string().default('ui/index.html'),
+})
+
+export type PluginViewContribution = z.infer<typeof pluginViewContributionSchema>
+
 export const pluginManifestSchema = z.object({
   /** 插件 id，全局唯一，小写字母数字连字符 */
   id: z.string().regex(PLUGIN_ID_PATTERN, 'plugin id must be lowercase alphanumeric/dash'),
@@ -42,6 +62,8 @@ export const pluginManifestSchema = z.object({
   /** main 进程入口，相对插件目录，默认 main.mjs；可省略（纯 UI 插件） */
   main: z.string().optional(),
   panels: z.array(pluginPanelContributionSchema).default([]),
+  /** 中央视图：侧栏「应用」入口 + 中央内容区面板 */
+  views: z.array(pluginViewContributionSchema).default([]),
 })
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>
@@ -72,6 +94,27 @@ export function pluginAdapterId(pluginId: string): string {
 
 export function isPluginAdapterId(adapterId: string | undefined): boolean {
   return !!adapterId && adapterId.startsWith('plugin:')
+}
+
+/** 中央视图的完整 id，与右栏面板共用 `plugin:` 命名空间 */
+export function pluginViewGlobalId(pluginId: string, viewId: string): string {
+  return `plugin:${pluginId}:${viewId}`
+}
+
+/** 中央视图的 iframe 地址（pi-plugin:// 协议，见 main/plugins/protocol.ts） */
+export function pluginViewUrl(pluginId: string, entry: string): string {
+  return `pi-plugin://${pluginId}/${entry.replace(/^\/+/, '')}`
+}
+
+/** 侧栏/中央视图状态：对话（默认）或某个插件视图 */
+export type CenterView = { kind: 'chat' } | { kind: 'plugin'; pluginId: string; viewId: string }
+
+export const CHAT_CENTER_VIEW: CenterView = { kind: 'chat' }
+
+export function sameCenterView(a: CenterView, b: CenterView): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'chat') return true
+  return a.pluginId === (b as { pluginId: string }).pluginId && a.viewId === (b as { viewId: string }).viewId
 }
 
 export function pluginIdFromAdapterId(adapterId: string): string {
