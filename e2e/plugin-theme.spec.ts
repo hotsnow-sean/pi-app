@@ -15,8 +15,7 @@ test('scheduler panel follows host theme', async () => {
   const agent = await launchAgentApp(port, { language: 'zh', config: { theme: 'light' }, keepHome: true })
   const { win } = agent
   try {
-    await win.getByRole('button', { name: '展开右侧面板' }).first().click()
-    await win.getByRole('tab', { name: '定时任务' }).first().click()
+    await win.locator('[data-plugin-view="scheduler:main"]').click()
     const frame = win.frameLocator('iframe[src^="pi-plugin://scheduler"]')
     await expect(frame.locator('body')).toBeVisible({ timeout: 20_000 })
 
