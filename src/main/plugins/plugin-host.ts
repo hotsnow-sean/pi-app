@@ -137,8 +137,13 @@ export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; e
     return { ok: true }
   }
   try {
+    // Node 的 ESM 缓存以 URL 为键：把入口文件的 mtime 编进 query，插件改动后
+    // 「停用 → 启用」就能拿到新模块，不必重启应用。
+    // 局限：只有入口文件被 bust，相对导入的子模块仍命中缓存——需要热重载的逻辑
+    // 请放在入口里；改了子模块仍需重启应用。
+    const version = fs.statSync(entryPath).mtimeMs
     const mod = (await dynamicImport(
-      `file://${entryPath.split(path.sep).join('/')}`,
+      `file://${entryPath.split(path.sep).join('/')}?v=${version}`,
     )) as {
       activate?: (ctx: unknown) => Promise<unknown> | unknown
       deactivate?: () => unknown
