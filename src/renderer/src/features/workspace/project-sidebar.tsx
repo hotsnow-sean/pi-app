@@ -12,6 +12,7 @@ import { useSessionContextMenu } from './use-session-context-menu'
 import { ProjectContextMenuPortal } from './project-context-menu'
 import { useProjectContextMenu } from './use-project-context-menu'
 import { enterBlankSession } from '@renderer/lib/blank-session-transition'
+import { revealConversation } from '@renderer/lib/reveal-conversation'
 import { refreshWorkspaceSessionLists } from '@renderer/lib/refresh-workspace-session-lists'
 import { SIDEBAR_RELOAD_EVENT } from '@renderer/lib/reload-current-session-data'
 import { sessionFilesEqual } from '@renderer/lib/session-file-key'
@@ -329,6 +330,8 @@ export function ProjectSidebar({
   }, [sessionScope, searchActive, diskPaths, currentWorkspace, loadWorkspaceSessions])
 
   const switchDiskProject = async (path: string) => {
+    // 已在项目里也要回对话：应用视图占着中央区时，"点项目"就是想看它的对话（见 revealConversation）
+    revealConversation()
     if (workspacePathsEqual(path, currentWorkspace) && !ephemeralSandboxDraft) return
     try {
       await activateWorkspace(path)
@@ -343,6 +346,7 @@ export function ProjectSidebar({
   }
 
   const openSandboxDialog = async (box: SandboxEntry) => {
+    revealConversation()
     try {
       let sessionId = box.sessionId
       let sessionFile = box.sessionFile
