@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -18,13 +18,13 @@
     {
       "name": "bg_start",
       "label": "启动后台任务",
-      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Note: detached background processes do not obey the abort key; stop them with bg_stop.",
+      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Shell defaults to the same one the bash tool uses (Git Bash on Windows); pass shell:'cmd' only when the command is genuinely cmd syntax. The result tells you whether the task will report back.",
       "parameters": {
         "type": "object",
         "properties": {
           "command": {
             "type": "string",
-            "description": "The shell command to run, exactly as you would type it in a terminal (cmd on Windows, sh elsewhere)."
+            "description": "The shell command to run, exactly as you would type it in a terminal. Default shell is bash (same as the bash tool), so bash syntax works."
           },
           "label": {
             "type": "string",
@@ -33,6 +33,11 @@
           "cwd": {
             "type": "string",
             "description": "Working directory. Defaults to the current session's working directory — only set it to run somewhere else."
+          },
+          "shell": {
+            "type": "string",
+            "enum": ["auto", "bash", "cmd", "powershell"],
+            "description": "Which shell interprets the command. Default 'auto' = bash if available (recommended: the bash tool also runs bash). Use 'cmd'/'powershell' only for native syntax — bash syntax under cmd is rejected instead of silently mangled."
           }
         },
         "required": ["command"]
@@ -42,14 +47,14 @@
     {
       "name": "bg_output",
       "label": "读取后台任务输出",
-      "description": "Read a background task's output. Call it with only an id to get the tail; pass nextOffset from a previous call to read only what is new. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically.",
+      "description": "Read a background task's output. Call it with only an id to get the tail; pass nextOffset from a previous call to read only what is new. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically. If you need to give a task a moment to produce output, pass waitMs instead of calling bash sleep.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": { "type": "string", "description": "Task id, e.g. bg-3." },
           "offset": {
             "type": "number",
-            "description": "Byte offset to continue from; omit to read the tail of the log."
+            "description": "Byte offset to continue from; omit to read the tail of the log. The reply tells you nextOffset."
           },
           "tailLines": {
             "type": "number",
@@ -57,7 +62,11 @@
           },
           "maxBytes": {
             "type": "number",
-            "description": "Maximum bytes to read in this call (default 16KB, max 256KB)."
+            "description": "Maximum bytes to read in this call (default 16KB, max 256KB, minimum 64B — the value you pass is honoured, the reply reports chunkBytes)."
+          },
+          "waitMs": {
+            "type": "number",
+            "description": "Wait up to this long (max 30000ms) for NEW output instead of returning immediately. Returns as soon as there is new bytes or the task ends. This is not a wait-for-completion: completion still arrives as an automatic report."
           }
         },
         "required": ["id"]
@@ -67,7 +76,7 @@
     {
       "name": "bg_stop",
       "label": "停止后台任务",
-      "description": "Stop a running background task and its whole process tree. Use it when the user asks to abandon something, or when a task is clearly stuck or was started by mistake.",
+      "description": "Stop a running background task and its whole process tree. Use it when the user asks to abandon something, or when a task is clearly stuck or was started by mistake. Pass waitMs to get the final state in the same call instead of querying again. A stopped task reports exitCode null on purpose — judge the outcome by status, not by the exit code of a killed process.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -75,6 +84,10 @@
           "force": {
             "type": "boolean",
             "description": "Kill immediately instead of asking the process to exit first."
+          },
+          "waitMs": {
+            "type": "number",
+            "description": "Wait up to this long (max 10000ms) for the process to actually exit, so the reply carries the final status."
           }
         },
         "required": ["id"]

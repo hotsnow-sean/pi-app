@@ -18,6 +18,14 @@ import type { PluginToolDescriptor } from '@shared/plugin-manifest'
 type ToolResultPayload = {
   content: Array<{ type: 'text'; text: string }>
   isError?: boolean
+  /**
+   * 结构化结果（可选）。
+   *
+   * 模型读到的 content 只能是文本，插件返回对象时会被 stringify——在代码执行类模式下
+   * 调用方拿到的是字符串，还得自己 JSON.parse。把原始对象留在这里，UI 与代码模式可以
+   * 直接用它，插件也不必为了「机器可读」而把数据塞进正文。
+   */
+  details?: Record<string, unknown>
 }
 
 /** callId → 取消句柄：worker 侧 abort/超时会发 plugin-tool-cancel */
@@ -51,14 +59,30 @@ function textResult(text: string, isError = false): ToolResultPayload {
   return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) }
 }
 
-/** 插件返回值 → pi 的工具结果（字符串 / {text,isError} / 任意对象都接） */
+function asDetails(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const value = (raw as { details?: unknown }).details
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+/**
+ * 插件返回值 → pi 的工具结果。
+ *
+ * 接受三种形状：
+ *   - 字符串                          → 原样当正文
+ *   - { text, isError?, details? }    → 正文 + 结构化 result（推荐写法）
+ *   - 任意对象                        → 序列化进正文，同时作为 details 留给代码模式/UI
+ */
 function normalizeResult(raw: unknown): ToolResultPayload {
   if (typeof raw === 'string') return textResult(raw)
-  if (raw && typeof raw === 'object') {
-    const obj = raw as { text?: unknown; isError?: unknown }
-    if (typeof obj.text === 'string') return textResult(obj.text, obj.isError === true)
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as { text?: unknown; isError?: unknown; details?: unknown }
+    if (typeof obj.text === 'string') {
+      return { content: [{ type: 'text', text: obj.text }], ...(obj.isError === true ? { isError: true } : {}), ...(asDetails(raw) ? { details: asDetails(raw) } : {}) }
+    }
     try {
-      return textResult(JSON.stringify(raw))
+      return { content: [{ type: 'text', text: JSON.stringify(raw) }], details: raw as Record<string, unknown> }
     } catch {
       return textResult(String(raw))
     }

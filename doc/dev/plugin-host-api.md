@@ -79,13 +79,21 @@ manifest 里声明的工具会被注入每个会话，模型直接调用。执�
 
 ```js
 invoke('tool.execute', { name, args, sessionFile, cwd, signal })
-// → 字符串 | { text, isError? } | 任意可 JSON 序列化对象
+// → 字符串 | { text, isError?, details? } | 任意可 JSON 序列化对象
 ```
 
 - `sessionFile` / `cwd` 是**发起调用的会话**透传下来的（worker 带上来的，插件在 main 侧本来拿不到）。
 - 单次调用超时 20 分钟；用户 Esc 会 abort，`signal` 同步触发。
 - 工具名全局唯一：与内置工具或其它插件重名会被跳过（记日志，不覆盖）。
 - 插件工具**不受**内置工具白名单约束，权限等同 bash。
+
+**返回值怎么选**（这是踩过的坑）：
+
+- 模型读到的 `content` **只能是文本**——返回对象会被 stringify，调用方还得 `JSON.parse`。
+- 推荐 `{ text, details }`：`text` 写给人/模型看（可读的 key: value，不要把 JSON 贴进去），
+  `details` 放原始对象，宿主一路带到 worker 的 tool result（`details` 字段）。
+- 代码执行类模式（codemode）里，`details` 才是被当对象用的那一份；正文永远只是文本。
+
 
 ## 6. UI（`views[]`）
 

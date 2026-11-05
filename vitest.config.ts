@@ -20,6 +20,8 @@ export default defineConfig({
       'packages/shared/**/*.test.ts',
       'src/browser-runtime/**/*.test.ts',
       'src/extension-compat/**/*.test.ts',
+      // 内置插件的 main 侧（真实子进程行为：shell 契约、分页、停止语义）
+      'plugins/**/*.test.mjs',
     ],
     exclude: ['node_modules/**', 'out/**', 'dist/**', 'e2e/**'],
   },
