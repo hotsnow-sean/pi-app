@@ -151,7 +151,7 @@ function reportBadge(task) {
   if (task.report === 'sent') return '<span class="report-badge sent">已回报</span>'
   if (task.report === 'failed') return '<span class="report-badge failed">回报失败</span>'
   // 为什么没回报要能一眼看到：规则不透明比不回报更让人困惑
-  if (task.report === 'skipped')
+  if (task.report === 'skipped' || task.report === 'suppressed')
     return `<span class="report-badge" title="${esc(task.reportNote || '按当前回报策略跳过')}">未回报</span>`
   if (task.report === 'pending') return '<span class="report-badge">待回报</span>'
   return ''
@@ -187,7 +187,7 @@ function rowHtml(task) {
         ${reportBadge(task)}
         ${task.timeoutMs ? `<span class="report-badge">超时 ${fmtDuration(task.timeoutMs)}</span>` : ''}
         <span class="path" title="${esc(task.logPath)}">${esc(task.logPath)}${size ? ` · ${size}` : ''}</span>
-        ${task.report === 'failed' || task.report === 'skipped' ? `<button class="link-btn" data-act="retry" data-id="${esc(task.id)}">重新回报</button>` : ''}
+        ${task.report === 'failed' || task.report === 'skipped' || task.report === 'suppressed' ? `<button class="link-btn" data-act="retry" data-id="${esc(task.id)}">重新回报</button>` : ''}
         ${running ? `<button class="link-btn" data-act="stop" data-id="${esc(task.id)}">停止</button>` : `<button class="link-btn" data-act="rerun" data-id="${esc(task.id)}">重跑</button><button class="link-btn" data-act="remove" data-id="${esc(task.id)}">删除记录</button>`}
       </div>
     </div>
