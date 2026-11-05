@@ -8,9 +8,9 @@
  * 契约：
  *   invoke('tool.execute', { name, args, sessionFile, cwd, signal }) → { text, details? }
  *   invoke('listTasks' | 'readOutput' | 'stopTask' | 'removeTask' | 'retryReport'
- *          | 'rerunTask' | 'clearTasks')
- *   invoke('sessionBarState', { sessionFile })  → 会话条数据（只含当前会话的任务）
- *   invoke('focusTask', { id })                 → 让右栏面板翻到这一条（面板比 focus.seq）
+ *          | 'rerunTask' | 'clearTasks' | 'refreshBar')
+ *   invoke('composerBarAction', { action: 'select' | 'stop', id })
+ *        → 输入框托盘的点击回调；select 顺带把 focus.seq +1，右栏面板比 seq 翻到那一条
  *
  * 三条设计红线（见 doc/dev/background-tasks-design.md）：
  *   1. 输出不经宿主内存：由 shell 把 stdout/stderr 分别重定向到两个文件，
@@ -1266,14 +1266,6 @@ const methods = {
       pushBarForTask(task)
       return { ok: stopped, status: task.status }
     }
-    focus = { id: task.id, seq: focus.seq + 1 }
-    return { ok: true, focus: { ...focus } }
-  },
-
-  /** 会话条点击 → 记住目标任务，右栏面板轮询到 seq 变化就展开它 */
-  async focusTask({ id } = {}) {
-    const task = taskById(String(id || ''))
-    if (!task) throw new Error(`unknown task: ${id}`)
     focus = { id: task.id, seq: focus.seq + 1 }
     return { ok: true, focus: { ...focus } }
   },
