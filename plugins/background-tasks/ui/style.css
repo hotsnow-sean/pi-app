@@ -126,3 +126,19 @@ body {
   font-family: inherit; font-size: 12px; padding: 2px 9px; border-radius: 6px; cursor: pointer;
 }
 .ghost-btn:hover { background: var(--card); color: var(--text); }
+
+/* ---------- 窄栏（右栏面板，约 288px）----------
+   同一份 UI 两处复用：中央视图宽、右栏窄。窄的时候只留必要信息，
+   回报策略这类「知道就好」的说明让位给任务本身。 */
+@media (max-width: 460px) {
+  #app { padding: 10px 8px; }
+  .head { flex-wrap: wrap; gap: 4px 8px; margin-bottom: 8px; }
+  .head h1 { font-size: 14px; }
+  .head .policy { display: none; }
+  .row-head { padding: 8px 9px; gap: 6px; }
+  .row-body { padding: 0 9px 10px 9px; }
+  .out { max-height: 220px; }
+  .foot { gap: 6px 8px; }
+  /* 路径在窄栏里没有信息增益，不如把宽度让给重跑/删除 */
+  .foot .path { display: none; }
+}

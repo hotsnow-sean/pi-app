@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -12,6 +12,23 @@
       "description": "任务列表、命令与输出、停止与清理",
       "icon": "Timer",
       "entry": "ui/index.html"
+    }
+  ],
+  "panels": [
+    {
+      "id": "tasks",
+      "title": "后台任务",
+      "description": "当前任务与实时输出；从会话条点进来会直接定位到那一条",
+      "icon": "Timer",
+      "entry": "ui/index.html"
+    }
+  ],
+  "sessionBars": [
+    {
+      "id": "tasks",
+      "title": "后台任务条",
+      "entry": "ui/session-bar.html",
+      "height": 34
     }
   ],
   "tools": [
