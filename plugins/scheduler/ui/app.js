@@ -392,7 +392,10 @@ function renderDetail() {
         <h1 style="display:inline">${esc(t.name)}</h1>
         <span style="color:var(--text-2);margin-left:8px">${esc(t.scheduleLabel)}</span>
       </div>
-      <button class="back-link" id="btn-back">← 返回列表</button>
+      <button class="back-link" id="btn-back" title="返回任务列表">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        <span>返回列表</span>
+      </button>
     </div>
     <div class="card">
       <div class="card-desc" style="margin:0">${esc(t.prompt) || '<span style="opacity:.5">（无提示词）</span>'}</div>
