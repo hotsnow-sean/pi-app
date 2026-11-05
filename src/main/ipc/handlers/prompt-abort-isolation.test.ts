@@ -25,6 +25,10 @@ vi.mock('../../session-bind-state', () => ({
 vi.mock('../../clipboard-temp-images', () => ({
   writeClipboardTempImage: vi.fn(),
 }))
+// plugin session-level tools pull in the plugin host (electron-store) — stub them out.
+vi.mock('../../plugins/plugin-tools', () => ({
+  pluginToolDescriptors: vi.fn(() => []),
+}))
 
 import { registerPromptHandlers } from './prompt'
 
