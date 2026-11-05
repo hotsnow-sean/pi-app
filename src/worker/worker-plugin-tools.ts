@@ -19,6 +19,8 @@ const CALL_TIMEOUT_MS = 20 * 60_000
 type ToolResultPayload = {
   content: Array<{ type: 'text'; text: string }>
   isError?: boolean
+  /** 插件给的结构化结果；模型看不到，代码模式/UI 可以拿到对象本身 */
+  details?: Record<string, unknown>
 }
 
 let api: ExtensionAPI | null = null
@@ -117,12 +119,13 @@ function registerOne(pi: ExtensionAPI, def: PluginToolDescriptor): void {
     description: def.description,
     // 纯 JSON Schema：pi 对非 TypeBox schema 走自己的 JSON Schema 校验路径
     parameters: def.parameters as unknown as ToolDefinition['parameters'],
-    async execute(_toolCallId, params, signal): Promise<{ content: ToolResultPayload['content']; details: Record<string, never> }> {
+    async execute(_toolCallId, params, signal): Promise<{ content: ToolResultPayload['content']; details: Record<string, unknown> }> {
       const result = await callMain(def, params, signal)
       if (result.isError) {
         throw new Error(result.content.map((c) => c.text).join('\n') || 'plugin tool failed')
       }
-      return { content: result.content, details: {} }
+      // details 原样透传：插件返回的是对象时，这里就是那个对象（不再是空 {}）
+      return { content: result.content, details: result.details ?? {} }
     },
   })
 }

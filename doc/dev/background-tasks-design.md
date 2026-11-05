@@ -339,3 +339,61 @@ type BgTask = {
 已实现：四工具、任务表落盘、重启接管（pid 探测 → lost）、日志增量读、回报策略（all/long/failures/off + 阈值）、5 秒合并、单条消息最多展开 3 个任务、面板列表与展开、停止、删除、重新回报。
 
 未实现（按 §8 第三批）：`plugin-events` 推送（面板用 1.5 秒轮询代替）、`sessionBars` 入口条（目前从侧栏「应用」进）、ANSI 着色、时间线来源行渲染（回报正文自带「【后台任务回报】」前缀作为区分）。
+
+## 11. 实测反馈吸收（v0.1.1）
+
+一份 12 个场景的实测报告指出了几处问题。逐条核验后的处理与理由如下。
+
+### 11.1 shell 契约：默认对齐内置 bash 工具（P0）
+
+- **问题**：`bg_start` 在 Windows 走 `shell: true`（cmd），而内置 bash 工具跑的是 Git Bash。模型按 bash 写命令，cmd 把 `$i`、`$(seq 1 3)` 当普通文本吃掉——命令照跑、退出码 0、输出却是错的。这是**假成功**，比报错危险。
+- **做法**：`shell?: 'auto' | 'bash' | 'cmd' | 'powershell'`，默认 `auto` = 探测 Git Bash（常见安装路径 + `where bash`），找到就用；找不到才回落 cmd。`cmd` / `powershell` 只能显式指定。
+- **兜底**：最终落到 cmd 时，命令里出现 `$(`、`${`、`for … in`、`export x=`、`[[` 一律**直接报错**并提示传 `shell:'bash'`，不再静默变形。
+- 另一种 shell 走临时 `.ps1`（脚本文件 + cmd 重定向，避开它自己 `*>` 写 UTF-16 的乱码问题）。
+
+### 11.2 返回值：可读文本 + details（P0 的一半）
+
+- **问题**：插件工具返回对象，宿主 `JSON.stringify` 成文本，调用方还要自己 parse。
+- **现实**：模型侧的 tool result `content` 协议只有文本，**做不到「返回纯对象」**。能做的是把两件事分开：
+  - `text`：给人/模型读的摘要（`bg-3「构建」已完成，耗时 12.3s`），不再是一坨 JSON；
+  - `details`：原始对象，宿主新增字段一路透传到 worker 的 tool result。
+- 宿主侧改动：`ToolResultPayload.details` → `plugin-tools.ts` 解析 → `worker-plugin-tools.ts` 不再写死 `details: {}`。
+
+### 11.3 分页契约（P1）
+
+`readLog()` 原来有 1KB 隐式下限，`maxBytes: 100` 实际拿 1024B。现在下限降到 64B（编码安全），返回值补 `chunkBytes` / `truncated`，schema 写明区间。
+
+### 11.4 停止语义（P1）
+
+- `bg_stop({ waitMs })`：等进程真退出再返回（上限 10s），省掉「再查一次」。
+- 被杀的进程会带无意义退出码（taskkill 通常是 1），原先直接写进 `exitCode`，与真实失败撞车。现在 stopped 的 `exitCode` 一律 `null`，原始码留 `rawExitCode`，原因记 `stopReason: user | log-limit`。
+
+### 11.5 bg_output 长轮询，不做 bg_wait（P1，改了方案）
+
+报告建议加 `bg_wait(id, timeoutMs)`。**不做**：需要等结果时内置 bash 工具本来就是同步的，再加 wait 等于鼓励「先 start 再 wait」这种最差用法。
+
+替代：`bg_output({ waitMs })`——阻塞到**有新输出或任务结束**就返回（上限 30s）。协作式，不承诺终态，主链仍是「跑完自动回报」。
+
+### 11.6 回报透明化（P2）
+
+- `bg_start` 返回 `details.report = { policy, willReport, reason }`，模型在启动时就知道「这个任务会不会自己回来」。
+- `scheduleReport` 记 `reportNote`（如「成功且耗时 3s 短于阈值 15s」），面板 badge 的 tooltip 直接显示。
+- 加 `if (task.report === 'sent') return` 防御性去重。
+- 说明：策略本身早就可配（`all / long / failures / off`），缺的是让模型知道当前策略，不是再加配置项。
+
+### 11.7 顺手修掉的两个小问题
+
+- `pruneTasks()` 原来遇到运行中的尾巴就 `break`，任务数会突破 50 上限；改成从旧到新找可删项，跳过运行中的。
+- `bg_list` 显式按 `startedAt` 倒序（原来依赖 `unshift` 的插入顺序，恢复来的任务顺序不可靠）。
+
+### 11.8 明确不做
+
+| 项 | 理由 |
+|---|---|
+| `bg_wait` | 与内置 bash 工具职责重叠，且鼓励最差用法 |
+| stdout/stderr 分流 | cmd 下没有 tee；bash 的进程替换能双写但顺序失真、对 Git Bash 版本敏感。等真有排查需求再做 |
+| 返回纯对象 | 模型侧 content 只能是文本，`details` 透传已是能做到的极限 |
+
+### 11.9 测试
+
+新增 `plugins/background-tasks/main.test.mjs`（6 条，真实子进程）：bash 循环能跑出三行、cmd 下 bash 语法被拒、`maxBytes: 64` 精确生效、`bg_stop` 等到终态且 `exitCode === null`、启动时回报预期、短任务跳过回报并记原因。vitest include 增加 `plugins/**/*.test.mjs`。

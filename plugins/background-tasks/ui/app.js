@@ -107,7 +107,7 @@ function statusText(task) {
   if (task.status === 'running') return `已运行 ${fmtDuration(state.serverNow - task.startedAt)}`
   if (task.status === 'exited') return `已完成 · ${fmtDuration((task.endedAt || task.startedAt) - task.startedAt)}`
   if (task.status === 'failed') return `退出码 ${task.exitCode === null || task.exitCode === undefined ? '?' : task.exitCode}`
-  if (task.status === 'stopped') return '已停止'
+  if (task.status === 'stopped') return task.stopReason === 'log-limit' ? '已停止（日志超限）' : '已停止'
   if (task.status === 'lost') return '状态丢失'
   return task.status
 }
@@ -131,7 +131,9 @@ function reportBadge(task) {
   if (task.status === 'running') return ''
   if (task.report === 'sent') return '<span class="report-badge sent">已回报</span>'
   if (task.report === 'failed') return '<span class="report-badge failed">回报失败</span>'
-  if (task.report === 'skipped') return '<span class="report-badge">未回报</span>'
+  // 为什么没回报要能一眼看到：规则不透明比不回报更让人困惑
+  if (task.report === 'skipped')
+    return `<span class="report-badge" title="${esc(task.reportNote || '按当前回报策略跳过')}">未回报</span>`
   if (task.report === 'pending') return '<span class="report-badge">待回报</span>'
   return ''
 }
@@ -151,7 +153,7 @@ function rowHtml(task) {
       <span class="chev">${ICON_CHEV}</span>
     </div>
     <div class="row-body">
-      <div class="cmd" title="${esc(task.cwd)}">${esc(task.command)}</div>
+      <div class="cmd" title="${esc(`${task.shell || ''} · ${task.cwd}`)}">${esc(task.command)}</div>
       <pre class="out" data-out="${esc(task.id)}"></pre>
       <div class="foot">
         ${reportBadge(task)}
