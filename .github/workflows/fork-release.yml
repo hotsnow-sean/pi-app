@@ -1,0 +1,72 @@
+# fork 专用：只构建 Windows 安装包（NSIS + Portable）。
+# 上游 .github/workflows/release.yml 覆盖四平台，但 tag 构建时 Android job
+# 强制要求 ANDROID_KEYSTORE_BASE64 签名 secret（fork 没有会挂，且阻塞 Release job），
+# 全平台也烧 fork 的 Actions 免费额度。本 workflow 与上游 release.yml 互不干扰：
+# 两个 workflow 都会响应 v* tag，fork 仓库只认这份出的 Windows 包即可。
+# 触发：push tag v* 或手动（Actions 页 Run workflow）。
+name: Fork Release (Windows)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $i), retry in 20s..."
+            sleep 20
+          done
+          exit 1
+
+      - name: Export icon
+        run: npm run icon:export
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package (NSIS + Portable)
+        run: npx electron-builder --win --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-desktop-win-${{ github.ref_name }}
+          path: |
+            dist/*Setup*.exe
+            dist/*Portable*.exe
+          if-no-files-found: error
+
+      # tag 构建时把安装包挂到 GitHub Release（releaseType: release，见 electron-builder.yml publish 段；
+      # 此处只挂文件，不发 latest.yml 自动更新元数据，避免覆盖上游正式通道）
+      - name: Attach to GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*Setup*.exe
+            dist/*Portable*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
