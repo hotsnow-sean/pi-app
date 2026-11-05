@@ -1464,6 +1464,8 @@ export async function deactivate() {
     if (queue.timer) clearTimeout(queue.timer)
   }
   reportQueues.clear()
+  // 重载后任务 id 不会复用，旧标记只会变成内存垃圾
+  deletedIds.clear()
   // 超时定时器只是「谁盯着」而非「任务本身」：插件卸载后不再兜底，任务继续跑
   for (const timer of timeouts.values()) clearTimeout(timer)
   timeouts.clear()
