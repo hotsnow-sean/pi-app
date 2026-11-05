@@ -27,7 +27,7 @@ import { prepareAdapterCatalog, installAdapterCatalog } from '../extension-compa
 import { capabilitiesExtension } from './worker-capabilities.js'
 import { modelRoutersExtension } from './worker-model-routers.js'
 import { browserToolsExtension } from './worker-browser-tools.js'
-import { pluginToolsExtension } from './worker-plugin-tools.js'
+import { pluginToolsExtension, setPluginToolSessionResolver } from './worker-plugin-tools.js'
 
 
 
@@ -87,6 +87,12 @@ export const st: WorkerMutableState = {
 function nextSeq(): number {
   return ++st.seq
 }
+
+// 插件工具执行体在 Main 进程，问「谁调用我」时只能由 Worker 回答
+setPluginToolSessionResolver(() => ({
+  sessionFile: st.session?.sessionFile ?? null,
+  cwd: st.currentCwd || null,
+}))
 
 export function beginRunIdentity(): void {
   st.currentRunId = `run-${nextSeq()}`

@@ -12,6 +12,7 @@ import { handlePluginToolResponse, handleSetPluginTools } from './worker-plugin-
 const dispatch: Record<string, (msg: WorkerIncomingMessage, reply: WorkerReply) => Promise<void>> = {
   'init': Turn.handleInit,
   'prompt': Turn.handlePrompt,
+  'customPrompt': Turn.handleCustomPrompt,
   'abort': Turn.handleAbort,
   'steer': Turn.handleSteer,
   'followUp': Turn.handleFollowup,

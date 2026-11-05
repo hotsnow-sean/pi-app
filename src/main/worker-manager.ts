@@ -57,6 +57,23 @@ export class WorkerManager {
   private foregroundPoolKey: string | null = null
   private lifecycleChain: Promise<unknown> = Promise.resolve()
   private idleTimer: ReturnType<typeof setInterval> | null = null
+  /** 会话运行事件订阅（插件宿主的 sessions.onRunEvent 桥）：idle/failed/cancelled 是终态 */
+  private runEventListeners = new Set<(payload: { sessionFile: string; phase: string; cwd: string }) => void>()
+
+  /**
+   * 订阅所有会话的运行事件（run started/running/idle/failed/cancelled）。
+   * 这是插件感知「某个会话跑完一轮」的唯一通道——worker 事件本就汇聚在
+   * forwardAppEvent，这里只把它分发给订阅者，不做任何过滤。
+   * 返回解除订阅函数（插件停用时调用，防止悬空回调）。
+   */
+  onSessionRunEvent(
+    listener: (payload: { sessionFile: string; phase: string; cwd: string }) => void,
+  ): () => void {
+    this.runEventListeners.add(listener)
+    return () => {
+      this.runEventListeners.delete(listener)
+    }
+  }
 
   setMainWindow(win: BrowserWindow): void {
     this.mainWindow = win
@@ -333,6 +350,16 @@ export class WorkerManager {
     applySessionEventToSessionLeafOverride(enriched)
     observeAppEventForCompletion(enriched)
     remoteTap.appEvent(enriched)
+    if (event?.type === 'run' && sessionFile) {
+      const phase = (event as { phase?: string }).phase ?? ''
+      for (const listener of this.runEventListeners) {
+        try {
+          listener({ sessionFile, phase, cwd: fromCwd })
+        } catch {
+          /* 订阅者出错不拦事件流 */
+        }
+      }
+    }
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return
     this.mainWindow.webContents.send('ipc:events', enriched)
     void agentTurnActive
@@ -490,6 +517,19 @@ export class WorkerManager {
 
   async sendPrompt(text: string, sessionFile?: string): Promise<void> {
     await this.request('prompt', { text, sessionFile })
+  }
+
+  /**
+   * 插件向指定**宿主会话**投递一条 custom message 并驱动一轮（ctx.sessions.send）。
+   * resolveSlotForRpc 会按 sessionFile 自动唤起/装载对应 worker（读 meta.cwd 冷启动），
+   * 所以这里不需要调用方保证 worker 存活——投递是「定向到会话」而不是「定向到前台」。
+   */
+  async sendCustomPrompt(
+    sessionFile: string,
+    message: { customType: string; content: string; display?: boolean; details?: unknown },
+    options?: { deliverAs?: 'steer' | 'followUp' | 'nextTurn' },
+  ): Promise<void> {
+    await this.request('customPrompt', { sessionFile, message, options })
   }
   /**
    * Abort agent turn on the session's existing worker only.

@@ -1,0 +1,19 @@
+{
+  "id": "ping-back",
+  "name": "回话测试",
+  "version": "0.1.0",
+  "description": "e2e fixture:一个只做一件事的插件——把消息投递回调用它的那个会话。",
+  "main": "main.mjs",
+  "tools": [
+    {
+      "name": "ping_back",
+      "label": "回话",
+      "description": "Send a fixed test message back into the calling session, then return. Used by e2e to prove the plugin-to-session delivery path.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  ]
+}
