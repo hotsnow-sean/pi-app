@@ -71,6 +71,10 @@ const state = {
   policy: 'long',
   thresholdMs: 15000,
   serverNow: Date.now(),
+  /** main 侧 focus.seq：会话条点任务时递增，变了就把那一条展开 */
+  focusSeq: 0,
+  /** 待滚动到可见处的任务 id（本轮重建之后执行一次） */
+  pendingScroll: null,
 }
 let lastSignature = ''
 let lastError = ''
@@ -277,6 +281,19 @@ async function tick() {
     state.policy = String(res.policy || 'long')
     state.thresholdMs = Number(res.thresholdMs) || 15000
     state.serverNow = Number(res.serverNow) || Date.now()
+    // 会话条点了某条任务：seq 变了就把那一条展开并滚到可见处。
+    // 用 seq 而不是「是否等于当前展开项」——用户可能刚手动收起，再点一次还得能翻回来。
+    const focus = res.focus && typeof res.focus === 'object' ? res.focus : null
+    const focusHit = !!(focus && focus.id && Number(focus.seq) !== state.focusSeq)
+    if (focusHit) {
+      state.focusSeq = Number(focus.seq)
+      if (state.tasks.some((t) => t.id === focus.id)) {
+        state.open = focus.id
+        if (!state.streams.has(focus.id)) state.streams.set(focus.id, 'out')
+        lastSignature = ''
+        state.pendingScroll = focus.id
+      }
+    }
     const signature = state.tasks.map((t) => `${t.id}:${t.status}:${t.report}`).join(',')
     if (signature !== lastSignature) {
       lastSignature = signature
@@ -286,6 +303,11 @@ async function tick() {
       updateMeta()
     }
     if (state.open) await pullOutput(state.open)
+    if (state.pendingScroll) {
+      const el = root.querySelector(`.row[data-id="${state.pendingScroll}"]`)
+      state.pendingScroll = null
+      el?.scrollIntoView({ block: 'nearest' })
+    }
   } catch (error) {
     // 宿主重载 / invoke 失败：把原因摆到界面上，别让面板空着还不说话
     const message = String(error?.message || error)

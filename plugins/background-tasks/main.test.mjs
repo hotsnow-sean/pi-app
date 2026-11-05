@@ -253,3 +253,38 @@ describe('rerun and clear', () => {
     expect(stillAlive).toBe(false)
   }, 60_000)
 })
+
+describe('session bar', () => {
+  it('reports only the current session tasks, plus a count of others still running', async () => {
+    const mine = await start({ command: 'sleep 20', label: '本会话' }, { sessionFile: 'C:/w/a/sess-1.jsonl' })
+    const other = await start({ command: 'sleep 20', label: '别的会话' }, { sessionFile: 'C:/w/b/sess-2.jsonl' })
+
+    // 分隔符/大小写差异不该影响归属判断
+    const bar = await handle.invoke('sessionBarState', { sessionFile: 'c:\\w\\a\\sess-1.jsonl' })
+    const ids = bar.mine.map((t) => t.id)
+    expect(ids).toContain(mine.details.id)
+    expect(ids).not.toContain(other.details.id)
+    expect(bar.runningMine).toBe(1)
+    expect(bar.runningOthers).toBe(1)
+
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: mine.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: other.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
+  }, 60_000)
+
+  it('bumps focus seq so the panel knows to scroll to that task', async () => {
+    const res = await start({ command: 'sleep 20', label: '要定位的' })
+    const before = await handle.invoke('listTasks', {})
+    const seq0 = before.focus.seq
+
+    const focused = await handle.invoke('focusTask', { id: res.details.id })
+    expect(focused.focus.id).toBe(res.details.id)
+    expect(focused.focus.seq).toBe(seq0 + 1)
+
+    // 连点同一条也要再涨一次：面板靠 seq 变化重放定位
+    const again = await handle.invoke('focusTask', { id: res.details.id })
+    expect(again.focus.seq).toBe(seq0 + 2)
+
+    await expect(handle.invoke('focusTask', { id: 'bg-999' })).rejects.toThrow(/unknown task/)
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: res.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
+  }, 60_000)
+})

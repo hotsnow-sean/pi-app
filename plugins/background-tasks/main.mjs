@@ -9,6 +9,8 @@
  *   invoke('tool.execute', { name, args, sessionFile, cwd, signal }) → { text, details? }
  *   invoke('listTasks' | 'readOutput' | 'stopTask' | 'removeTask' | 'retryReport'
  *          | 'rerunTask' | 'clearTasks')
+ *   invoke('sessionBarState', { sessionFile })  → 会话条数据（只含当前会话的任务）
+ *   invoke('focusTask', { id })                 → 让右栏面板翻到这一条（面板比 focus.seq）
  *
  * 三条设计红线（见 doc/dev/background-tasks-design.md）：
  *   1. 输出不经宿主内存：由 shell 把 stdout/stderr 分别重定向到两个文件，
@@ -101,6 +103,33 @@ function save() {
 
 function taskById(id) {
   return state.tasks.find((t) => t.id === id) ?? null
+}
+
+/**
+ * 会话条点开某条任务时，右栏面板要「自动翻到那一条」。
+ * 用 seq 而不是布尔：同一个任务连点两次也要能再次把用户拽回来，面板侧比较 seq 变化即可。
+ * 不落盘——这是「谁在看什么」的界面状态，不是任务事实。
+ */
+let focus = { id: null, seq: 0 }
+
+/** 会话路径归一化：大小写、分隔符、尾斜杠在两端都可能不一致 */
+function normSession(p) {
+  const s = String(p || '').trim()
+  if (!s) return ''
+  return s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * 判断两个 sessionFile 是不是同一个会话。
+ * 全路径相等最可靠；退一步比 basename——同一份会话在不同入口可能带不同的前缀
+ * （工作区相对路径 vs 绝对路径），而 pi 的会话文件名本身带唯一 id，撞名几乎不可能。
+ */
+function sameSession(a, b) {
+  const x = normSession(a)
+  const y = normSession(b)
+  if (!x || !y) return false
+  if (x === y) return true
+  return path.posix.basename(x) === path.posix.basename(y)
 }
 
 // ---------- 小工具 ----------
@@ -1072,7 +1101,48 @@ const methods = {
       policy: String(settings.reportPolicy || 'long'),
       thresholdMs: Number(settings.reportThresholdMs) || SETTING_DEFAULTS.reportThresholdMs,
       serverNow: now,
+      /** 面板比较 seq 变化来「翻到这一条」，见 focusTask */
+      focus: { ...focus },
     }
+  },
+
+  /**
+   * 会话条的数据源：只回当前会话的任务 + 全局运行计数。
+   *
+   * 过滤放在 main 而不是 UI：sessionFile 的归一化规则（大小写/分隔符/basename 兜底）
+   * 只该有一份实现，两份早晚会漂。
+   */
+  async sessionBarState({ sessionFile } = {}) {
+    const now = Date.now()
+    const mine = state.tasks.filter((t) => sameSession(t.sessionFile, sessionFile))
+    const mini = (t) => ({
+      id: t.id,
+      label: t.label,
+      status: t.status,
+      exitCode: t.exitCode ?? null,
+      stopReason: t.stopReason ?? null,
+      startedAt: t.startedAt,
+      endedAt: t.endedAt ?? null,
+      durationMs: (t.endedAt ?? now) - t.startedAt,
+      timeoutMs: t.timeoutMs ?? null,
+    })
+    return {
+      sessionFile: String(sessionFile || ''),
+      mine: mine.slice(0, 20).map(mini),
+      runningMine: mine.filter((t) => t.status === 'running').length,
+      runningOthers: state.tasks.filter((t) => t.status === 'running' && !sameSession(t.sessionFile, sessionFile)).length,
+      total: state.tasks.length,
+      serverNow: now,
+      focus: { ...focus },
+    }
+  },
+
+  /** 会话条点击 → 记住目标任务，右栏面板轮询到 seq 变化就展开它 */
+  async focusTask({ id } = {}) {
+    const task = taskById(String(id || ''))
+    if (!task) throw new Error(`unknown task: ${id}`)
+    focus = { id: task.id, seq: focus.seq + 1 }
+    return { ok: true, focus: { ...focus } }
   },
 
   async readOutput({ id, offset, maxBytes, tailLines, stream }) {
