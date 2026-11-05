@@ -7,6 +7,7 @@
  * keyed state.
  */
 import type { AdapterWidgetProjection } from '@shared/adapter-widget'
+import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
 import { normalizeSessionFileKey } from '@shared/session-file-key'
 import { workspacePathKey } from '@shared/workspace-path'
 import type { WorkerLiveSnapshot } from '@renderer/lib/session-worker-sync'
@@ -27,6 +28,8 @@ export interface SessionState {
   pendingFollowUp: string[]
   fileChanges: FileChange[]
   composerWidget: AdapterWidgetProjection | null
+  /** 插件推到输入框上方的那条摘要，按 pluginId 归并（同一会话可以有多条） */
+  pluginComposerBars: Record<string, PluginComposerBarState>
   /** Text pushed into this session's composer (fork / rewind / line refs), consumed once shown. */
   composerPrefill: string | null
   composerPrefillMode: 'replace' | 'append'
@@ -49,6 +52,7 @@ export const SESSION_FIELDS: readonly SessionField[] = [
   'pendingFollowUp',
   'fileChanges',
   'composerWidget',
+  'pluginComposerBars',
   'composerPrefill',
   'composerPrefillMode',
 ]
@@ -75,6 +79,7 @@ export const KEYED_SESSION_FIELDS: ReadonlySet<SessionField> = new Set<SessionFi
   'pendingFollowUp',
   'fileChanges',
   'composerWidget',
+  'pluginComposerBars',
   'composerPrefill',
   'composerPrefillMode',
 ])
@@ -97,6 +102,7 @@ export function emptySessionState(key: string): SessionState {
     pendingFollowUp: [],
     fileChanges: [],
     composerWidget: null,
+    pluginComposerBars: {},
     composerPrefill: null,
     composerPrefillMode: 'replace',
   }

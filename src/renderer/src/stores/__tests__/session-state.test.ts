@@ -38,6 +38,7 @@ function baseMirror() {
     pendingFollowUp: [] as string[],
     fileChanges: s.fileChanges,
     composerWidget: null,
+    pluginComposerBars: {},
     composerPrefill: null as string | null,
     composerPrefillMode: 'replace' as 'replace' | 'append',
   }

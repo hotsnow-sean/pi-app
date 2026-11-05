@@ -2,6 +2,7 @@
 
 import type { CompletionOutcome } from './completion-preview'
 import type { AdapterWidgetProjection, AdapterWidgetProtocol } from './adapter-widget'
+import type { PluginComposerBarState } from './plugin-composer-bar'
 
 export interface AppEventBase {
   seq: number
@@ -131,6 +132,18 @@ export interface ExtensionWidgetEvent extends AppEventBase {
   state?: AdapterWidgetProjection
 }
 
+/**
+ * 插件托盘：插件 main 主动推给某个会话的输入框上方摘要。
+ *
+ * 走 app event 而不是 iframe 轮询，是因为这条要「任务状态一变就变」，
+ * 而 renderer 没有能力反过来知道 main 何时变了。`bar: null` 表示这个会话没有东西要显示。
+ */
+export interface PluginWidgetEvent extends AppEventBase {
+  type: 'plugin_widget'
+  pluginId: string
+  bar: PluginComposerBarState | null
+}
+
 // SDK 安装进度（设置页 UI 用，与会话无关，不继承 AppEventBase）
 export interface SdkInstallProgressEvent {
   type: 'sdk-install-progress'
@@ -172,6 +185,7 @@ export type AppEvent =
   | AgentErrorEvent
   | CompletionEvent
   | ExtensionWidgetEvent
+  | PluginWidgetEvent
   | SdkInstallProgressEvent
   | SdkRuntimeChangedEvent
   | AdapterCatalogChangedEvent

@@ -249,5 +249,8 @@
     }
   },
   "thinkingShort": "思考 {{level}}",
-  "thinkingPrefix": "思考"
+  "thinkingPrefix": "思考",
+  "pluginBar": {
+    "stop": "停止"
+  }
 }

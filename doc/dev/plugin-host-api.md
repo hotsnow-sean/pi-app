@@ -27,6 +27,7 @@ plugins/<id>/
 | `ctx.settings.onChange(cb)` | 设置变更回调，返回解除函数 |
 | `ctx.notify(title, body)` | 系统通知（点击聚焦应用） |
 | `ctx.ui.ask(questions, opts)` | 弹宿主问卷并等用户作答（ask 插件的全部依赖） |
+| `ctx.ui.setComposerBar(sessionFile, bar)` | 往**输入框上方的托盘**推一条摘要（见 §6.2）；`null` = 这个会话没有东西可显示 |
 | `ctx.runAgentPrompt({cwd, prompt, timeoutMs})` | 起一个**独立 inMemory 会话**跑一次 prompt，阻塞到结束。用户看不见、历史不连续 |
 | `ctx.sessions.send(spec)` | 往**用户自己的会话**投递消息并驱动一轮（见 §3） |
 | `ctx.sessions.onRunEvent(cb)` | 订阅会话运行事件（见 §4） |
@@ -123,9 +124,38 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 1. 归属判断由插件自己做——宿主不做反查，也不预判空态。插件报 0 就等于「这里没我事」。
 2. 右上角有宿主的浮层按钮（28×28，落在 44px 条内），内容最右端要自行避让约 40–48px。
 
+### 6.2 输入框托盘（`ctx.ui.setComposerBar`）
+
+比 `sessionBars[]` 更贴近视线的落点：**输入框上方那条窄带**，和 adapter 的 todo tray 同一位置、
+同一套视觉（`.composer-accessory-row`）。区别是**宿主原生渲染**，没有 iframe。
+
+```ts
+ctx.ui.setComposerBar(sessionFile, {
+  summary: '2 个任务在运行',   // 摘要行主文案，插件自己组织语言
+  detail: '构建桌面端',        // 摘要行次要文案（通常是当前任务）
+  tone: 'running',            // running | done | error，只影响图标与色调
+  rows: [                     // 展开后最多 8 行
+    { id: 'bg-3', label: '构建桌面端', status: 'running', startedAt: Date.now(), action: 'stop' }
+  ],
+  panelId: 'plugin:<id>:<panel>',  // 点行时宿主打开这个右栏面板
+} | null)
+```
+
+约定与边界：
+- **`rows[].startedAt`**：给了就由宿主显示实时耗时。运行中的行别自己算一个「12s」推上来——
+  推一次就固化的数字会骗人。
+- **`rows[].action: 'stop'`**：行尾出现停止按钮。点击后宿主回调
+  `invoke('composerBarAction', { action: 'stop', id })`。
+- **点行**：宿主先打开 `panelId`（若该面板真实存在），再回调
+  `composerBarAction({ action: 'select', id })`。插件用这个方法记账/定位，不给也能用（就是打不开详情）。
+- 这条**不是第二个面板**：只有摘要 + 若干行。要展示命令全文、实时输出、分页，放右栏。
+- 一个会话可以有多条（不同插件），各占一行；插件推 `null` 表示自己在这个会话没话说，
+  托盘随之消失，**不会留一条空壳把输入框顶下去**。
+- 状态走 app event（`plugin_widget`），不是轮询：任务从「运行中」变「结束」是 main 侧才知道的时刻。
+
 ## 7. 已知限制
 
-- 没有 `plugin-events`：main 侧无法主动推 UI，面板只能轮询（后台任务就是 1.5 秒轮询）。
+- 没有通用的 `plugin-events`：除托盘外，main 侧仍不能主动推 UI，面板只能轮询（后台任务面板是 1.5 秒）。
 - 没有 `ctx.agents`：插件不能自养常驻子会话。
 - 工具调用透传的 `cwd` 是 worker 当前工作目录，不保证等于会话 workspace 根（切过 worktree 时会变）。
 - `plugin-context` 的 `sessionFile` 来自 renderer（`historySessionFile`），工具体收到的

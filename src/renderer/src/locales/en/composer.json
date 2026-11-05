@@ -249,5 +249,8 @@
     }
   },
   "thinkingShort": "Thinking {{level}}",
-  "thinkingPrefix": "Thinking"
+  "thinkingPrefix": "Thinking",
+  "pluginBar": {
+    "stop": "Stop"
+  }
 }
