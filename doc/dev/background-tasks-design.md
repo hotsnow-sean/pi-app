@@ -567,9 +567,40 @@ v2 报告里两条 P2/P3 是同一个根因：**回报队列不知道「这条�
 |---|---|---|
 | `bg_clear` 删了记录，几秒后仍收到指向它的回报 | 队列里的 task 对象不随 state 删除而消失 | `dropQueuedReports(ids)` 同时清队列项与 timer |
 | `bg_stop(waitMs)` 已同步返回终态，随后又来一条同样内容 | `finishTask` 早已入队，显式动作没有撤回权 | 拿到终态就 `suppressReport()`（`report='suppressed'`） |
-| 极端情况：队列里的记录在投递前被删 | — | `deliver()` 投递前按 `state.tasks.includes` 二次校验 |
+| 极端情况：队列里的记录在投递前被删 | — | `deliver()` 投递前按 id 二次校验 |
 
 `suppressed` 在面板里显示为「未回报」，仍可手动「重新回报」——抑制的是自动打扰，不是能力。
+
+### 14.5.1 v3 报告后的加固：把「已宣布死亡」提前到第一个 await 之前
+
+v3 实测仍复现孤儿回报（`bg_clear` 之后收到指向已删任务的回报）。根因不是「忘了撤队列」，而是
+**撤得太晚**：
+
+- `bg_clear({keepRunning:false})` 要先 `await waitForTerminal(3s)` 才动队列；
+- 而 `flushReports` 会在合并窗口到点后把队列 **整段取走**（`reportQueues.delete` + `splice`），
+  取走之后 `dropQueuedReports` 就找不到它了；
+- 中间还有 `tailOf()` 的文件 IO。窗口足够宽。
+
+修法是把「这条 id 已经不该再有任何回报」变成独立事实，而不是靠队列里有没有这条对象：
+
+- 新增内存集合 `deletedIds`，`markDeleted(ids)` 在删除流程的**第一个 await 之前**写入，
+  并同时 `dropQueuedReports`。60 秒后自动清理（`unref`，不拖住宿主退出）。
+- `scheduleReport` 入口先查 `deletedIds`：进程退出事件晚于记录删除时，不再入队。
+- `flushReports` 取队列后先按 `deletedIds` 过滤，`skipped` 计数只算真正排队被跳过的。
+- `deliver` 的二次校验从「对象引用在数组里」改成「id 仍在 `state.tasks` 且不在 `deletedIds`」——
+  插件重载后对象会被重建，引用比对会误判。
+- `enqueueReport` 同 id 去重：exit / close 两个回调都可能触发 `scheduleReport`。
+
+**内联回执即交付**（v3 §3.3）：`bg_start` 回执里带上完整结果时调用
+`suppressReport(fresh, '启动回执里已带完整结果（内联返回）')`。此前文案写着「不会再单独回报」，
+几秒后却补发一条，属于自相矛盾——不变量统一为「终态已经通过工具响应交付给调用方 ⇒ suppressed」。
+
+**工具 schema 与实现对齐**：`bg_clear.status` 的实现一直容错单个字符串，schema 却只声明
+`array`，模型按描述写字符串会被参数校验挡下。改为 `anyOf: [array, string]`，用 typebox
+`Value.Check` 实测四种输入（数组 / 字符串 / 混合 / 非法）行为正确。
+
+**托盘不再「点完就收起」**：点某行只是把详情开到右栏，列表本身没有消失的理由。收起后用户
+每看一条都得重新展开一次，属于纯粹的重复劳动。`e2e` 里加了断言钉住这一点。
 
 ### 14.6 其余小口子
 
@@ -586,8 +617,9 @@ pid 不在了就记 `lost`——退出码永远拿不到，不假装知道结果
 
 ### 14.8 测试
 
-- `main.test.mjs` 14 → 20 条：托盘只推本会话任务（含分隔符/大小写差异）、终态推送与清空、
-  `composerBarAction` 递增 seq / 停止、清空记录撤回报、`bg_stop` 抑制重复回报、`format:'json'`、`maxBytes` 回显。
-- `composer-plugin-bar.test.tsx` 3 条：无状态不渲染（不占位）、折叠只一行、展开出停止按钮。
+- `main.test.mjs` 20 → 23 条：新增「内联回执后不再回报」「`bg_clear` 单字符串」
+  「停在半路时清理不产生孤儿回报（3s 等待窗口）」。
+- `composer-plugin-bar.test.tsx` 3 → 4 条：点行打开右栏后**不收起**列表。
 - `e2e/plugin-background-composer-bar.spec.ts`：真实宿主里走完「出现摘要 → 点开 → 点行开右栏 →
-  任务结束后摘要变成已结束」——最后一步专门证明推送链路成立（没有轮询也更新了）。
+  任务结束后摘要变成已结束」——最后一步专门证明推送链路成立（没有轮询也更新了）；点行后
+  `[data-row-id]` 仍在，证明托盘没有被自己的点击收起。

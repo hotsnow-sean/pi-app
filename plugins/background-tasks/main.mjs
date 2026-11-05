@@ -62,6 +62,15 @@ let unsubscribeRuns = null
 const sessionPhases = new Map()
 /** sessionFile → { items: BgTask[], timer } 合并窗口 */
 const reportQueues = new Map()
+/**
+ * 已判定「不该再有任何回报」的 id。
+ *
+ * 为什么不只靠 state.tasks.includes：删除流程里有 await（停进程最多 3s），而队列
+ * 可能刚好在这段窗口里被 flush 取走——取走之后 dropQueuedReports 就找不到它了。
+ * 这个集合在删除动作的**第一个 await 之前**写入，deliver 前统一比对，把窗口压到同步段。
+ * 保留 60s 是为了兜住「进程退出事件晚于记录删除」的回调。
+ */
+const deletedIds = new Set()
 /** 活着的子进程句柄（不在 storage 里，重启即丢，靠 pid 探测接管） */
 const children = new Map()
 /** task id → 超时定时器；不落盘，重启后按 startedAt 重算 */
@@ -703,6 +712,8 @@ function pruneTasks() {
 function scheduleReport(task) {
   // 防御性去重：同一个任务只允许被自动回报一次（retryReport 走的是显式通道）
   if (task.report === 'sent') return
+  // 记录已被清理（进程退出事件可能晚于 bg_clear 到达）：再入队就是一条死链
+  if (deletedIds.has(task.id)) return
   const policy = String(settings.reportPolicy || 'long')
   const skip = (reason) => {
     task.report = 'skipped'
@@ -721,13 +732,15 @@ function scheduleReport(task) {
 }
 
 function enqueueReport(task) {
-  task.report = 'pending'
   const key = task.sessionFile
   let queue = reportQueues.get(key)
   if (!queue) {
     queue = { items: [], timer: null }
     reportQueues.set(key, queue)
   }
+  // 同一任务只排一次：exit / close 两个回调都可能触发 scheduleReport
+  if (queue.items.some((t) => t.id === task.id)) return
+  task.report = 'pending'
   queue.items.push(task)
   if (queue.timer) return
   // 合并窗口：同一会话短时间内的多个完成事件只唤醒一次
@@ -766,14 +779,32 @@ function suppressReport(task, reason) {
   task.reportNote = reason
 }
 
+/**
+ * 删除流程的统一入口：先「宣布死亡」，再慢慢收尸。
+ *
+ * 调用点必须在任何 await 之前——队列的 flush 是异步的（合并窗口 + 读日志文件），
+ * 只删记录不先标记，就会出现「记录没了、回报照发」的孤儿消息。
+ */
+function markDeleted(ids) {
+  if (!ids.length) return
+  for (const id of ids) {
+    deletedIds.add(id)
+    // 60s 足够覆盖晚到的 exit 回调；unref 避免拖住宿主退出
+    setTimeout(() => deletedIds.delete(id), 60_000).unref?.()
+  }
+  dropQueuedReports(ids)
+}
+
 async function flushReports(sessionFile) {
   const queue = reportQueues.get(sessionFile)
   if (!queue) return
   reportQueues.delete(sessionFile)
   const items = queue.items.splice(0)
-  if (!items.length) return
-  const detailed = items.slice(0, MAX_DETAILED_REPORTS)
-  const skipped = items.length - detailed.length
+  // 从「队列取走」到「真正投递」之间记录可能已被清理：先剔掉，别让 skipped 计数跟着虚高
+  const alive = items.filter((t) => !deletedIds.has(t.id))
+  if (!alive.length) return
+  const detailed = alive.slice(0, MAX_DETAILED_REPORTS)
+  const skipped = alive.length - detailed.length
   for (const task of detailed) {
     task.tailText = await tailOf(task)
     task.lineCount = await countLines(task)
@@ -822,7 +853,8 @@ function buildReport(items, skipped) {
 async function deliver(sessionFile, items, skipped) {
   // 二次校验：从入队到真正投递之间，这条记录可能已经被删除/清理了。
   // 投一条「bg-14 已失败」而 bg-14 早已不存在，用户只会去查一个空 id。
-  const live = items.filter((t) => state.tasks.includes(t))
+  // 按 id 比对而不是对象引用：插件重载后 state 里的对象可能被重建过。
+  const live = items.filter((t) => !deletedIds.has(t.id) && state.tasks.some((x) => x.id === t.id))
   if (live.length === 0) {
     for (const task of items) delete task.tailText
     return
@@ -958,6 +990,9 @@ async function describeStart(task) {
   await new Promise((resolve) => setTimeout(resolve, 120))
   const fresh = taskById(task.id)
   if (fresh && fresh.status !== 'running') {
+    // 回执已经把终态完整交给调用方了：自动回报必须让位。
+    // 否则文案写着「不会再单独回报」，几秒后又收到一条，等于自己打自己的脸。
+    suppressReport(fresh, '启动回执里已带完整结果（内联返回）')
     const tail = await tailOf(fresh)
     const errTail = fresh.errBytes > 0 ? await tailOf(fresh, 'err') : ''
     const details = {
@@ -970,6 +1005,7 @@ async function describeStart(task) {
       output: tail || '',
       outputErr: errTail || '',
       returnedInline: true,
+      report: fresh.report,
     }
     const text = [
       `${task.id}「${fresh.label}」已经在 ${details.durationMs}ms 内结束：${statusText(fresh)}。`,
@@ -1056,6 +1092,9 @@ const tools = {
       }
     }
     const stopping = []
+    const ids = victims.map((t) => t.id)
+    // 先「宣布删除」再去停进程：下面的 await 最长 3s，队列可能正好在这段时间 flush
+    markDeleted(ids)
     for (const task of victims) {
       // keepRunning:false 时会把运行中的也纳入：必须先停进程，否则记录没了、进程还在
       if (task.status === 'running') {
@@ -1066,9 +1105,6 @@ const tools = {
     }
     // 停进程是异步的（Windows 走 taskkill）：等它真的退出再删日志，别删了文件它还在写
     await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
-    const ids = victims.map((t) => t.id)
-    // 记录删了，排队中的回报也得撤：否则稍后还会收到一条指向已删任务的回报
-    dropQueuedReports(ids)
     state.tasks = state.tasks.filter((t) => !ids.includes(t.id))
     save()
     for (const task of victims) removeTaskFiles(task)
@@ -1313,6 +1349,9 @@ const methods = {
       return wanted.length === 0 || wanted.includes(t.status)
     })
     const stopping = []
+    const ids = victims.map((t) => t.id)
+    // 与 bg_clear 同一条不变量：先宣布删除，再等进程退出
+    markDeleted(ids)
     for (const task of victims) {
       if (task.status === 'running') {
         stopTask(task, true, 'user')
@@ -1321,9 +1360,6 @@ const methods = {
       clearTimeoutFor(task)
     }
     await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
-    const ids = victims.map((t) => t.id)
-    // 记录删掉之后，排队中的回报必须一起撤：否则用户会收到一条指向「不存在的任务」的回报
-    dropQueuedReports(ids)
     state.tasks = state.tasks.filter((t) => !ids.includes(t.id))
     save()
     for (const task of victims) removeTaskFiles(task)
@@ -1334,9 +1370,9 @@ const methods = {
   async removeTask({ id }) {
     const task = taskById(String(id || ''))
     if (!task) throw new Error(`unknown task: ${id}`)
+    markDeleted([task.id])
     if (task.status === 'running') stopTask(task, true, 'user')
     clearTimeoutFor(task)
-    dropQueuedReports([task.id])
     state.tasks = state.tasks.filter((t) => t.id !== task.id)
     removeTaskFiles(task)
     save()
