@@ -132,6 +132,69 @@ function sameSession(a, b) {
   return path.posix.basename(x) === path.posix.basename(y)
 }
 
+// ---------- 输入框托盘 ----------
+
+const PLUGIN_ID = 'background-tasks'
+/** 右栏面板的完整 id（宿主 catalog 里的形式） */
+const PANEL_ID = `plugin:${PLUGIN_ID}:tasks`
+/** 托盘里最多列几条：再多就该去右栏看，而不是把输入框顶上去 */
+const BAR_MAX_ROWS = 8
+
+function barMeta(task) {
+  if (task.status === 'failed') return `退出码 ${task.exitCode ?? '?'}`
+  if (task.status === 'stopped') return task.stopReason === 'timeout' ? '已超时' : '已停止'
+  if (task.status === 'lost') return '状态丢失'
+  return fmtDuration((task.endedAt ?? Date.now()) - task.startedAt)
+}
+
+/**
+ * 这个会话在托盘里该显示什么。
+ *
+ * 归属判断留在 main（sameSession）而不是 UI：工具侧的 sessionFile 来自 worker，
+ * 推送侧也只是插件自己知道的值，归一化只该有一份实现，两份早晚会漂。
+ */
+function composerBarFor(sessionFile) {
+  const mine = state.tasks.filter((t) => sameSession(t.sessionFile, sessionFile))
+  if (mine.length === 0) return null
+  const running = mine.filter((t) => t.status === 'running').sort((a, b) => b.startedAt - a.startedAt)
+  const failed = mine.filter((t) => t.status === 'failed' || t.status === 'lost')
+  const summary = running.length
+    ? `${running.length} 个任务在运行`
+    : failed.length
+      ? `${failed.length} 个任务失败`
+      : `${mine.length} 个任务已结束`
+  const ordered = [...running, ...mine.filter((t) => t.status !== 'running').sort((a, b) => b.startedAt - a.startedAt)]
+  return {
+    summary,
+    detail: (running[0] ?? failed[0] ?? ordered[0])?.label ?? '',
+    tone: running.length ? 'running' : failed.length ? 'error' : 'done',
+    rows: ordered.slice(0, BAR_MAX_ROWS).map((t) => ({
+      id: t.id,
+      label: t.label,
+      status: t.status,
+      // 运行中的耗时由宿主现算：推一次就固化的「12s」会骗人
+      ...(t.status === 'running' ? { startedAt: t.startedAt, action: 'stop' } : { meta: barMeta(t) }),
+    })),
+    panelId: PANEL_ID,
+  }
+}
+
+/** 把某个会话的托盘状态推给宿主；bar 为 null 表示这个会话没东西可显示 */
+function pushComposerBar(sessionFile) {
+  if (!sessionFile) return
+  try {
+    ctx?.ui?.setComposerBar?.(sessionFile, composerBarFor(sessionFile))
+  } catch (error) {
+    // 托盘是锦上添花：推不动不能影响任务本身
+    ctx?.log?.('composer bar push failed', error)
+  }
+}
+
+/** 某条任务变了之后刷新它所属会话的托盘 */
+function pushBarForTask(task) {
+  if (task?.sessionFile) pushComposerBar(task.sessionFile)
+}
+
 // ---------- 小工具 ----------
 
 function fmtDuration(ms) {
@@ -150,6 +213,11 @@ function fmtBytes(bytes) {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+/** 工具返回里的结构化出口：`format:'json'` 时把 details 原样交出去，省得调用方用正则解析排版 */
+function jsonBlock(payload) {
+  return ['```json', JSON.stringify(payload, null, 2), '```'].join('\n')
 }
 
 function labelOf(command) {
@@ -195,7 +263,8 @@ async function readLog(task, { offset, maxBytes, tailLines, stream }) {
     .then((s) => s.size)
     .catch(() => 0)
   // 64B 是编码安全的下限（够放一个多字节字符），不再有 1KB 的隐式抬升
-  const cap = Math.min(Math.max(Number(maxBytes) || READ_CHUNK_DEFAULT, MIN_READ_BYTES), READ_CHUNK_MAX)
+  const requested = Number(maxBytes) || READ_CHUNK_DEFAULT
+  const cap = Math.min(Math.max(requested, MIN_READ_BYTES), READ_CHUNK_MAX)
   const fromEnd = offset === undefined || offset === null
   const start = fromEnd ? Math.max(0, size - cap) : Math.min(Math.max(0, Number(offset) || 0), size)
   const end = fromEnd ? size : Math.min(size, start + cap)
@@ -211,6 +280,9 @@ async function readLog(task, { offset, maxBytes, tailLines, stream }) {
     hasMore: false,
     truncated: false,
     stream: stream === 'err' ? 'err' : 'out',
+    requestedMaxBytes: requested,
+    /** 实际生效的切片大小：被上下限夹过时与请求值不同，调用方不该猜 */
+    effectiveMaxBytes: cap,
   }
   if (end <= start) return out
   let handle = null
@@ -472,6 +544,7 @@ function startTask({ command, label, cwd, sessionFile, shell, timeoutSeconds }) 
 
   bindChild(task, child)
   armTimeout(task)
+  pushBarForTask(task)
   return task
 }
 
@@ -540,6 +613,7 @@ function finishTask(task, { code = null, signal = null, error = null } = {}) {
   void refreshBytes(task)
   save()
   scheduleReport(task)
+  pushBarForTask(task)
 }
 
 async function refreshBytes(task) {
@@ -663,6 +737,35 @@ function enqueueReport(task) {
   }, MERGE_WINDOW_MS)
 }
 
+/**
+ * 撤掉排队中、但已经不该发的回报。
+ *
+ * 两种来源：记录被删/被清（回报会指向一个不存在的任务，用户看到的是死链），
+ * 以及用户已经在 bg_stop 里同步拿到了终态（再推一遍是重复信息）。
+ * 只动队列不动 timer 的话，用户仍会在 5 秒后收到一条幽灵回报。
+ */
+function dropQueuedReports(ids) {
+  const set = new Set(ids)
+  if (set.size === 0) return
+  for (const [sessionFile, queue] of reportQueues) {
+    const kept = queue.items.filter((t) => !set.has(t.id))
+    if (kept.length === queue.items.length) continue
+    queue.items = kept
+    if (kept.length === 0) {
+      if (queue.timer) clearTimeout(queue.timer)
+      reportQueues.delete(sessionFile)
+    }
+  }
+}
+
+/** 显式动作已经交付过结果：把这条的自动回报关掉，并记下原因 */
+function suppressReport(task, reason) {
+  dropQueuedReports([task.id])
+  if (task.report === 'sent') return
+  task.report = 'suppressed'
+  task.reportNote = reason
+}
+
 async function flushReports(sessionFile) {
   const queue = reportQueues.get(sessionFile)
   if (!queue) return
@@ -717,26 +820,33 @@ function buildReport(items, skipped) {
 }
 
 async function deliver(sessionFile, items, skipped) {
-  const content = buildReport(items, skipped)
+  // 二次校验：从入队到真正投递之间，这条记录可能已经被删除/清理了。
+  // 投一条「bg-14 已失败」而 bg-14 早已不存在，用户只会去查一个空 id。
+  const live = items.filter((t) => state.tasks.includes(t))
+  if (live.length === 0) {
+    for (const task of items) delete task.tailText
+    return
+  }
+  const content = buildReport(live, skipped)
   try {
     await ctx.sessions.send({
       sessionFile,
       content,
       origin: {
-        pluginId: 'background-tasks',
+        pluginId: PLUGIN_ID,
         label: '后台任务',
         kind: 'report',
-        detail: items.map((t) => t.id).join(', '),
+        detail: live.map((t) => t.id).join(', '),
       },
     })
-    for (const task of items) {
+    for (const task of live) {
       task.report = 'sent'
       task.reportedAt = Date.now()
       delete task.tailText
     }
   } catch (error) {
     ctx.log('report delivery failed', error)
-    for (const task of items) {
+    for (const task of live) {
       task.report = 'failed'
       task.error = error?.message || String(error)
       delete task.tailText
@@ -763,6 +873,10 @@ function recover() {
   for (const task of state.tasks) {
     if (task.status === 'running') armTimeout(task)
   }
+  // 重启后宿主还没收过任何托盘状态：把有任务的会话各推一次
+  for (const sessionFile of new Set(state.tasks.map((t) => t.sessionFile).filter(Boolean))) {
+    pushComposerBar(sessionFile)
+  }
 
   probeTimer = setInterval(() => {
     let changed = false
@@ -775,6 +889,7 @@ function recover() {
         task.endedAt = task.endedAt ?? Date.now()
         changed = true
         scheduleReport(task)
+        pushBarForTask(task)
         continue
       }
       // 日志上限：别让一个 while(true) 打满磁盘。stdout + stderr 合并计算
@@ -926,15 +1041,17 @@ const tools = {
   },
 
   async bg_clear(args) {
-    const want = args.status ? String(args.status) : ''
+    const wanted = Array.isArray(args.status) ? args.status.map(String) : args.status ? [String(args.status)] : []
     const keepRunning = args.keepRunning !== false
     const victims = state.tasks.filter((t) => {
       if (keepRunning && t.status === 'running') return false
-      return !want || t.status === want
+      return wanted.length === 0 || wanted.includes(t.status)
     })
     if (!victims.length) {
       return {
-        text: want ? `没有状态为 ${want} 的任务可清理。` : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
+        text: wanted.length
+          ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
+          : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
         details: { cleared: 0, ids: [] },
       }
     }
@@ -950,9 +1067,12 @@ const tools = {
     // 停进程是异步的（Windows 走 taskkill）：等它真的退出再删日志，别删了文件它还在写
     await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
     const ids = victims.map((t) => t.id)
+    // 记录删了，排队中的回报也得撤：否则稍后还会收到一条指向已删任务的回报
+    dropQueuedReports(ids)
     state.tasks = state.tasks.filter((t) => !ids.includes(t.id))
     save()
     for (const task of victims) removeTaskFiles(task)
+    for (const task of victims) pushBarForTask(task)
     const remaining = state.tasks.filter((t) => t.status === 'running').length
     return {
       text: `已清理 ${ids.length} 条任务记录（${ids.join(', ')}）。${remaining ? `仍有 ${remaining} 个任务在运行。` : ''}`,
@@ -983,36 +1103,41 @@ const tools = {
       tailLines: args.tailLines ?? REPORT_TAIL_LINES,
       stream,
     })
+    const details = {
+      id: res.id,
+      status: res.status,
+      running: res.running,
+      exitCode: res.exitCode,
+      stream,
+      chunk: res.chunk,
+      chunkBytes: res.chunkBytes,
+      nextOffset: res.nextOffset,
+      totalBytes: res.totalBytes,
+      hasMore: res.hasMore,
+      truncated: res.truncated,
+      requestedMaxBytes: res.requestedMaxBytes,
+      effectiveMaxBytes: res.effectiveMaxBytes,
+      logPath: file,
+      errBytes: task.errBytes ?? 0,
+    }
+    // 结构化出口：脚本/CI 不该靠正则解析人类排版
+    if (args.format === 'json') return { text: jsonBlock(details), details }
     const lines = [
       `${task.id}「${task.label}」${statusText(task)} · ${fmtDuration((task.endedAt ?? Date.now()) - task.startedAt)}${
         stream === 'err' ? ' · stderr' : ''
       }`,
     ]
     if (res.totalBytes) lines.push(`日志 ${fmtBytes(res.nextOffset)}/${fmtBytes(res.totalBytes)}`)
+    if (res.requestedMaxBytes !== res.effectiveMaxBytes) {
+      lines.push(`maxBytes ${res.requestedMaxBytes} 已按 ${res.effectiveMaxBytes}B（允许范围 ${MIN_READ_BYTES}B~${fmtBytes(READ_CHUNK_MAX)}）实际执行。`)
+    }
     if (!res.chunk) lines.push(res.running ? '暂时还没有输出。' : '没有输出。')
     else lines.push('', '```', res.chunk.replace(/\n$/, ''), '```')
     if (res.hasMore) lines.push(`还有 ${fmtBytes(res.totalBytes - res.nextOffset)} 未读，下次传 offset=${res.nextOffset}。`)
     if (stream === 'out' && (task.errBytes || 0) > 0) {
       lines.push(`这个任务还有 ${fmtBytes(task.errBytes)} 的 stderr 输出，需要时传 stream:'err' 查看。`)
     }
-    return {
-      text: lines.join('\n'),
-      details: {
-        id: res.id,
-        status: res.status,
-        running: res.running,
-        exitCode: res.exitCode,
-        stream,
-        chunk: res.chunk,
-        chunkBytes: res.chunkBytes,
-        nextOffset: res.nextOffset,
-        totalBytes: res.totalBytes,
-        hasMore: res.hasMore,
-        truncated: res.truncated,
-        logPath: file,
-        errBytes: task.errBytes ?? 0,
-      },
-    }
+    return { text: lines.join('\n'), details }
   },
 
   async bg_stop(args) {
@@ -1020,6 +1145,8 @@ const tools = {
     if (!task) throw new Error(`unknown task: ${args.id}`)
     const stopped = stopTask(task, args.force === true)
     const settled = stopped ? await waitForTerminal(task, args.waitMs ?? 0) : true
+    // 结果已经在这个工具返回里交付了：撤掉排队中的自动回报，否则 5 秒后又来一条一样的
+    if (stopped && settled) suppressReport(task, '已在 bg_stop 中同步拿到终态')
     const details = {
       id: task.id,
       status: task.status,
@@ -1028,6 +1155,7 @@ const tools = {
       exitCode: task.exitCode ?? null,
       stopReason: task.stopReason ?? null,
       durationMs: (task.endedAt ?? Date.now()) - task.startedAt,
+      report: task.report,
     }
     const text = !stopped
       ? `${task.id} 已经不在运行（当前状态：${statusText(task)}），无需停止。`
@@ -1060,12 +1188,19 @@ const tools = {
       }))
     const running = tasks.filter((t) => t.status === 'running').length
     const policy = String(settings.reportPolicy || 'long')
+    const details = {
+      tasks,
+      running,
+      reportPolicy: policy,
+      thresholdMs: Number(settings.reportThresholdMs) || SETTING_DEFAULTS.reportThresholdMs,
+    }
+    if (args.format === 'json') return { text: jsonBlock(details), details }
     const text = tasks.length
       ? [`${tasks.length} 个任务（${running} 个运行中，回报策略 ${policy}，新→旧）：`]
           .concat(tasks.map((t) => `${t.id} · ${statusText(t)} · ${fmtDuration(t.durationMs)} · ${t.label}`))
           .join('\n')
       : '没有符合条件的后台任务。'
-    return { text, details: { tasks, running, reportPolicy: policy, thresholdMs: Number(settings.reportThresholdMs) || SETTING_DEFAULTS.reportThresholdMs } }
+    return { text, details }
   },
 }
 
@@ -1107,34 +1242,32 @@ const methods = {
   },
 
   /**
-   * 会话条的数据源：只回当前会话的任务 + 全局运行计数。
+   * 手动重推某个会话的托盘状态。
    *
-   * 过滤放在 main 而不是 UI：sessionFile 的归一化规则（大小写/分隔符/basename 兜底）
-   * 只该有一份实现，两份早晚会漂。
+   * 正常路径是「任务一变就推」，这里只是兜底：renderer 重载、推送失败、或 UI 刚拿到
+   * 会话上下文时，可以要一次最新值，不必等下一次任务事件。
    */
-  async sessionBarState({ sessionFile } = {}) {
-    const now = Date.now()
-    const mine = state.tasks.filter((t) => sameSession(t.sessionFile, sessionFile))
-    const mini = (t) => ({
-      id: t.id,
-      label: t.label,
-      status: t.status,
-      exitCode: t.exitCode ?? null,
-      stopReason: t.stopReason ?? null,
-      startedAt: t.startedAt,
-      endedAt: t.endedAt ?? null,
-      durationMs: (t.endedAt ?? now) - t.startedAt,
-      timeoutMs: t.timeoutMs ?? null,
-    })
-    return {
-      sessionFile: String(sessionFile || ''),
-      mine: mine.slice(0, 20).map(mini),
-      runningMine: mine.filter((t) => t.status === 'running').length,
-      runningOthers: state.tasks.filter((t) => t.status === 'running' && !sameSession(t.sessionFile, sessionFile)).length,
-      total: state.tasks.length,
-      serverNow: now,
-      focus: { ...focus },
+  async refreshBar({ sessionFile } = {}) {
+    pushComposerBar(String(sessionFile || ''))
+    return { ok: true, bar: composerBarFor(String(sessionFile || '')) }
+  },
+
+  /**
+   * 托盘里的点击回调（宿主约定的方法名）。
+   *
+   * 宿主只负责把「点了哪一行、点了什么动作」传回来，不解释业务：select 是看详情，
+   * stop 是停任务。详情定位复用 focus.seq——右栏面板自己比对，宿主不必知道这套。
+   */
+  async composerBarAction({ action, id } = {}) {
+    const task = taskById(String(id || ''))
+    if (!task) throw new Error(`unknown task: ${id}`)
+    if (action === 'stop') {
+      const stopped = stopTask(task, false)
+      pushBarForTask(task)
+      return { ok: stopped, status: task.status }
     }
+    focus = { id: task.id, seq: focus.seq + 1 }
+    return { ok: true, focus: { ...focus } }
   },
 
   /** 会话条点击 → 记住目标任务，右栏面板轮询到 seq 变化就展开它 */
@@ -1182,9 +1315,10 @@ const methods = {
 
   async clearTasks({ status, keepRunning } = {}) {
     const keep = keepRunning !== false
+    const wanted = Array.isArray(status) ? status.map(String) : status ? [String(status)] : []
     const victims = state.tasks.filter((t) => {
       if (keep && t.status === 'running') return false
-      return !status || t.status === String(status)
+      return wanted.length === 0 || wanted.includes(t.status)
     })
     const stopping = []
     for (const task of victims) {
@@ -1196,9 +1330,12 @@ const methods = {
     }
     await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
     const ids = victims.map((t) => t.id)
+    // 记录删掉之后，排队中的回报必须一起撤：否则用户会收到一条指向「不存在的任务」的回报
+    dropQueuedReports(ids)
     state.tasks = state.tasks.filter((t) => !ids.includes(t.id))
     save()
     for (const task of victims) removeTaskFiles(task)
+    for (const task of victims) pushBarForTask(task)
     return { ok: true, cleared: ids.length, ids }
   },
 
@@ -1207,9 +1344,11 @@ const methods = {
     if (!task) throw new Error(`unknown task: ${id}`)
     if (task.status === 'running') stopTask(task, true, 'user')
     clearTimeoutFor(task)
+    dropQueuedReports([task.id])
     state.tasks = state.tasks.filter((t) => t.id !== task.id)
     removeTaskFiles(task)
     save()
+    pushBarForTask(task)
     return { ok: true }
   },
 

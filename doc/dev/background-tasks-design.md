@@ -445,6 +445,9 @@ type BgTask = {
 
 ## 13. UI 形态（v0.3.0）：会话条 + 右栏详情
 
+> **已被 §14 推翻**：会话条（对话区顶部）在 v0.4.0 换成了输入框上方的托盘。
+> 保留本节是因为「归属判断放 main」「focus 用 seq 不用布尔」这两条仍然成立，右栏详情的部分也没变。
+
 前两版只有一个中央视图：想看任务得离开对话，翻到「应用」里。真实使用里最常问的是
 「我这个会话后台在跑什么」，这个问题的答案必须在视线第一落点，而不是三步之外。所以补两个落点。
 
@@ -512,3 +515,79 @@ type BgTask = {
 - `plugin-session-bar.test.tsx` 2 条：manifest 声明就挂 iframe、没声明就什么都不渲染。
 - `e2e/plugin-background-session-bar.spec.ts`：真实宿主里跑一次——摘要出现、点开列出任务、
   容器被撑高、点任务后右栏面板打开且 `.row.open` 命中。
+
+## 14. v0.4.0：托盘搬到输入框上方（推翻 §13 的落点）
+
+§13 把任务条放在对话区顶部，实际用下来「不够直观」——视线在输入框，条在窗口顶端，
+中间隔着一整屏历史。对照 `pi-deck-todo` 看明白了：它之所以好认，不是因为「在上面」，
+而是因为它被塞进了 `.composer-accessory-row`——margin 下压 -1px、只圆上面两个角、
+和输入框共用一条边，读起来像输入框向上凸起的一层。
+
+### 14.1 为什么不做成 iframe 塞进托盘
+
+先试过最省的做法：给 `sessionBars` 加个 `placement`，把 iframe 移进托盘（约 40 行）。
+放弃的原因是质感：托盘只有 28px 高、四周 1px 边框，iframe 的接缝、字体基线、圆角对不齐
+在这个尺度上藏不住；插件还得复刻宿主的 hover/focus 态。而这条要显示的只是「一行摘要 + 几行任务」，
+为此维护一套仿制皮肤不划算。
+
+### 14.2 走「借机制」：插件推，宿主画
+
+```
+插件 main → ctx.ui.setComposerBar(sessionFile, bar)
+          → app event `plugin_widget`（按 sessionFile 路由）
+          → renderer 写入该会话的 pluginComposerBars[pluginId]
+          → <ComposerPluginBars> 用 adapter 的同一套 CSS 原生渲染
+```
+
+- **为什么用 app event 而不是让 UI 轮询**：任务从 running 变结束是 main 侧才知道的时刻。
+  轮询只能把延迟摊平成平均 1 秒（原来是 2 秒一跳），推送才是「结束即变」。
+- **推送天然带 sessionFile**：切会话不会串台，插件也不用反查「现在看的是哪个会话」——
+  §13.2 里那套「UI 侧拿 historySessionFile 再比对」的复杂度直接消失。
+- **`workspaceId` 留空**：插件不知道工作区标识，编一个假的会被路由判成 background。
+  路由按 sessionFile 判定即可。
+
+### 14.3 契约只留必要的自由度
+
+`summary / detail / tone / rows / panelId`。行的 `status` 决定图标，`action: 'stop'` 决定有没有停止按钮，
+`startedAt` 给了就**由宿主现算耗时**——插件推一次的「12s」会永远停在 12s，属于会骗人的界面。
+点行走 `composerBarAction({ action: 'select' | 'stop', id })` 回调，宿主不解释业务语义。
+
+刻意不做的事：不支持自定义 HTML/版式。托盘是摘要，不是第二个面板；要富交互去右栏。
+
+### 14.4 与 todo tray 的排布
+
+`.composer-accessory-row` 加 `flex-wrap`，插件托盘 `flex: 1 1 100%` 独占一行，todo tray 落到下一行。
+任务名被截断比多占 28px 难受，所以不做左右分栏。
+
+### 14.5 回报队列与显式动作协同（吸收 v2 实测报告）
+
+v2 报告里两条 P2/P3 是同一个根因：**回报队列不知道「这条已经不用发了」**。
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| `bg_clear` 删了记录，几秒后仍收到指向它的回报 | 队列里的 task 对象不随 state 删除而消失 | `dropQueuedReports(ids)` 同时清队列项与 timer |
+| `bg_stop(waitMs)` 已同步返回终态，随后又来一条同样内容 | `finishTask` 早已入队，显式动作没有撤回权 | 拿到终态就 `suppressReport()`（`report='suppressed'`） |
+| 极端情况：队列里的记录在投递前被删 | — | `deliver()` 投递前按 `state.tasks.includes` 二次校验 |
+
+`suppressed` 在面板里显示为「未回报」，仍可手动「重新回报」——抑制的是自动打扰，不是能力。
+
+### 14.6 其余小口子
+
+- `format: 'text' | 'json'`（`bg_list` / `bg_output`）：脚本化场景不必用正则解析排版。
+- `maxBytes` 被上下限夹过时回显 `requestedMaxBytes` / `effectiveMaxBytes`，正文点明「已按 64B 实际执行」。
+- `bg_clear({ status: ['failed','stopped'] })` 收数组，单值仍兼容。
+- `lost` 的复现条件写进 §14.7，不再只存在于代码注释里。
+
+### 14.7 `lost` 何时出现
+
+宿主进程退出（正常关窗、崩溃、被任务管理器结束）时子进程仍在跑，重启后 `recover()` 按 pid 探测：
+pid 不在了就记 `lost`——退出码永远拿不到，不假装知道结果。它只出现在「宿主死过一次」的任务上；
+同一进程内正常结束的任务不会落到这个状态。
+
+### 14.8 测试
+
+- `main.test.mjs` 14 → 20 条：托盘只推本会话任务（含分隔符/大小写差异）、终态推送与清空、
+  `composerBarAction` 递增 seq / 停止、清空记录撤回报、`bg_stop` 抑制重复回报、`format:'json'`、`maxBytes` 回显。
+- `composer-plugin-bar.test.tsx` 3 条：无状态不渲染（不占位）、折叠只一行、展开出停止按钮。
+- `e2e/plugin-background-composer-bar.spec.ts`：真实宿主里走完「出现摘要 → 点开 → 点行开右栏 →
+  任务结束后摘要变成已结束」——最后一步专门证明推送链路成立（没有轮询也更新了）。

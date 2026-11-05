@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -18,17 +18,9 @@
     {
       "id": "tasks",
       "title": "后台任务",
-      "description": "当前任务与实时输出；从会话条点进来会直接定位到那一条",
+      "description": "当前任务与实时输出；从输入框上方的托盘点进来会直接定位到那一条",
       "icon": "Timer",
       "entry": "ui/index.html"
-    }
-  ],
-  "sessionBars": [
-    {
-      "id": "tasks",
-      "title": "后台任务条",
-      "entry": "ui/session-bar.html",
-      "height": 34
     }
   ],
   "tools": [
@@ -53,7 +45,12 @@
           },
           "shell": {
             "type": "string",
-            "enum": ["auto", "bash", "cmd", "powershell"],
+            "enum": [
+              "auto",
+              "bash",
+              "cmd",
+              "powershell"
+            ],
             "description": "Which shell interprets the command. Default 'auto' = bash if available (recommended: the bash tool also runs bash). Use 'cmd'/'powershell' only for native syntax — bash syntax under cmd is rejected instead of silently mangled."
           },
           "timeoutSeconds": {
@@ -61,9 +58,14 @@
             "description": "Kill the task automatically after this many seconds. Use it as a safety net for servers, watchers and anything that could otherwise run forever (e.g. 600 for a 10-minute build guard). Values under 5s are raised to 5s; max 24h. The task reports back with status 'stopped' and reason 'timeout'."
           }
         },
-        "required": ["command"]
+        "required": [
+          "command"
+        ]
       },
-      "card": { "template": "kv", "icon": "Play" }
+      "card": {
+        "template": "kv",
+        "icon": "Play"
+      }
     },
     {
       "name": "bg_output",
@@ -72,7 +74,10 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "description": "Task id, e.g. bg-3." },
+          "id": {
+            "type": "string",
+            "description": "Task id, e.g. bg-3."
+          },
           "offset": {
             "type": "number",
             "description": "Byte offset to continue from; omit to read the tail of the log. The reply tells you nextOffset."
@@ -91,13 +96,29 @@
           },
           "stream": {
             "type": "string",
-            "enum": ["out", "err"],
+            "enum": [
+              "out",
+              "err"
+            ],
             "description": "Which stream to read. 'out' (default) is stdout — the task's normal output. 'err' is stderr — where failures and compiler warnings go, and usually only a few lines, so read it first when a task failed."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "description": "\"text\" (default) is human-readable prose. \"json\" returns the same data as a JSON block — use it when you are going to parse the result programmatically."
           }
         },
-        "required": ["id"]
+        "required": [
+          "id"
+        ]
       },
-      "card": { "template": "kv", "icon": "FileText" }
+      "card": {
+        "template": "kv",
+        "icon": "FileText"
+      }
     },
     {
       "name": "bg_stop",
@@ -106,7 +127,10 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "description": "Task id, e.g. bg-3." },
+          "id": {
+            "type": "string",
+            "description": "Task id, e.g. bg-3."
+          },
           "force": {
             "type": "boolean",
             "description": "Kill immediately instead of asking the process to exit first."
@@ -116,9 +140,14 @@
             "description": "Wait up to this long (max 10000ms) for the process to actually exit, so the reply carries the final status."
           }
         },
-        "required": ["id"]
+        "required": [
+          "id"
+        ]
       },
-      "card": { "template": "kv", "icon": "Square" }
+      "card": {
+        "template": "kv",
+        "icon": "Square"
+      }
     },
     {
       "name": "bg_list",
@@ -129,12 +158,29 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["running", "exited", "failed", "stopped", "lost"],
+            "enum": [
+              "running",
+              "exited",
+              "failed",
+              "stopped",
+              "lost"
+            ],
             "description": "Only list tasks in this state."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "description": "\"text\" (default) is human-readable prose. \"json\" returns the same data as a JSON block — use it when you are going to parse the result programmatically."
           }
         }
       },
-      "card": { "template": "list", "icon": "ListChecks" }
+      "card": {
+        "template": "list",
+        "icon": "ListChecks"
+      }
     },
     {
       "name": "bg_rerun",
@@ -143,11 +189,19 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "description": "Id of the finished task to rerun, e.g. bg-3." }
+          "id": {
+            "type": "string",
+            "description": "Id of the finished task to rerun, e.g. bg-3."
+          }
         },
-        "required": ["id"]
+        "required": [
+          "id"
+        ]
       },
-      "card": { "template": "kv", "icon": "RotateCw" }
+      "card": {
+        "template": "kv",
+        "icon": "RotateCw"
+      }
     },
     {
       "name": "bg_clear",
@@ -157,9 +211,18 @@
         "type": "object",
         "properties": {
           "status": {
-            "type": "string",
-            "enum": ["exited", "failed", "stopped", "lost"],
-            "description": "Only clear tasks in this state. Omit to clear all finished tasks."
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "exited",
+                "failed",
+                "stopped",
+                "lost",
+                "running"
+              ]
+            },
+            "description": "Only clear tasks in these states, e.g. [\"failed\",\"stopped\"]. Omit to clear all finished tasks. A single string is also accepted."
           },
           "keepRunning": {
             "type": "boolean",
@@ -167,7 +230,10 @@
           }
         }
       },
-      "card": { "template": "kv", "icon": "Eraser" }
+      "card": {
+        "template": "kv",
+        "icon": "Eraser"
+      }
     }
   ],
   "settings": [
@@ -178,10 +244,22 @@
       "description": "回报会把结果投回发起任务的会话，让 agent 接着干。选「不回报」时任务照常跑，只是要你自己去面板看。",
       "default": "long",
       "options": [
-        { "value": "all", "label": "每个任务都回报" },
-        { "value": "long", "label": "只回报长任务与失败的" },
-        { "value": "failures", "label": "只回报失败的" },
-        { "value": "off", "label": "不回报，只更新面板" }
+        {
+          "value": "all",
+          "label": "每个任务都回报"
+        },
+        {
+          "value": "long",
+          "label": "只回报长任务与失败的"
+        },
+        {
+          "value": "failures",
+          "label": "只回报失败的"
+        },
+        {
+          "value": "off",
+          "label": "不回报，只更新面板"
+        }
       ]
     },
     {

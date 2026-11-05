@@ -15,6 +15,7 @@ import { activate, deactivate } from './main.mjs'
 let dataDir
 let handle
 let sent = []
+let bars = []
 
 function fakeCtx() {
   let stored = {}
@@ -28,6 +29,11 @@ function fakeCtx() {
     },
     settings: { get: () => ({}), onChange: () => {} },
     log: () => {},
+    ui: {
+      setComposerBar: (sessionFile, bar) => {
+        bars.push({ sessionFile, bar })
+      },
+    },
     sessions: {
       send: async (payload) => {
         sent.push(payload)
@@ -61,6 +67,7 @@ async function waitDone(id, timeoutMs = 30_000) {
 beforeEach(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-plugin-test-'))
   sent = []
+  bars = []
   handle = await activate(fakeCtx())
 })
 
@@ -254,37 +261,124 @@ describe('rerun and clear', () => {
   }, 60_000)
 })
 
-describe('session bar', () => {
-  it('reports only the current session tasks, plus a count of others still running', async () => {
+describe('composer bar', () => {
+  it('pushes only the tasks of the pushed session, with separator/case differences tolerated', async () => {
     const mine = await start({ command: 'sleep 20', label: '本会话' }, { sessionFile: 'C:/w/a/sess-1.jsonl' })
     const other = await start({ command: 'sleep 20', label: '别的会话' }, { sessionFile: 'C:/w/b/sess-2.jsonl' })
 
-    // 分隔符/大小写差异不该影响归属判断
-    const bar = await handle.invoke('sessionBarState', { sessionFile: 'c:\\w\\a\\sess-1.jsonl' })
-    const ids = bar.mine.map((t) => t.id)
+    const last = bars.filter((b) => b.sessionFile === 'C:/w/a/sess-1.jsonl').at(-1)
+    expect(last.bar.tone).toBe('running')
+    const ids = last.bar.rows.map((r) => r.id)
     expect(ids).toContain(mine.details.id)
     expect(ids).not.toContain(other.details.id)
-    expect(bar.runningMine).toBe(1)
-    expect(bar.runningOthers).toBe(1)
+    // 运行中的行必须带 startedAt 与 stop：宿主靠前者现算耗时，靠后者给停止按钮
+    const row = last.bar.rows.find((r) => r.id === mine.details.id)
+    expect(row.startedAt).toBeGreaterThan(0)
+    expect(row.action).toBe('stop')
+
+    // 大小写/分隔符不同也要归到同一个会话（宿主与工具侧的 sessionFile 来源不同）
+    const same = await handle.invoke('refreshBar', { sessionFile: 'c:\\w\\a\\sess-1.jsonl' })
+    expect(same.bar.rows.map((r) => r.id)).toContain(mine.details.id)
+    expect(same.bar.rows.map((r) => r.id)).not.toContain(other.details.id)
 
     await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: mine.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
     await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: other.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
   }, 60_000)
 
-  it('bumps focus seq so the panel knows to scroll to that task', async () => {
+  it('pushes a terminal state after the task ends and clears when nothing is left', async () => {
+    const res = await start({ command: 'echo bye', label: '短命' })
+    await waitDone(res.details.id)
+    const done = bars.filter((b) => b.sessionFile === 's1.jsonl').at(-1)
+    expect(done.bar.tone).toBe('done')
+    expect(done.bar.rows[0].status).toBe('exited')
+
+    await handle.invoke('removeTask', { id: res.details.id })
+    expect(bars.at(-1).bar).toBeNull()
+  }, 60_000)
+
+  it('bumps focus seq from composerBarAction so the panel scrolls to that task', async () => {
     const res = await start({ command: 'sleep 20', label: '要定位的' })
     const before = await handle.invoke('listTasks', {})
     const seq0 = before.focus.seq
 
-    const focused = await handle.invoke('focusTask', { id: res.details.id })
+    const focused = await handle.invoke('composerBarAction', { action: 'select', id: res.details.id })
     expect(focused.focus.id).toBe(res.details.id)
     expect(focused.focus.seq).toBe(seq0 + 1)
 
     // 连点同一条也要再涨一次：面板靠 seq 变化重放定位
-    const again = await handle.invoke('focusTask', { id: res.details.id })
+    const again = await handle.invoke('composerBarAction', { action: 'select', id: res.details.id })
     expect(again.focus.seq).toBe(seq0 + 2)
 
-    await expect(handle.invoke('focusTask', { id: 'bg-999' })).rejects.toThrow(/unknown task/)
+    await expect(handle.invoke('composerBarAction', { action: 'select', id: 'bg-999' })).rejects.toThrow(/unknown task/)
     await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: res.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
+  }, 60_000)
+
+  it('stops a task from the bar without waiting for a report', async () => {
+    const res = await start({ command: 'sleep 20', label: '托盘停止' })
+    const stopped = await handle.invoke('composerBarAction', { action: 'stop', id: res.details.id })
+    expect(stopped.ok).toBe(true)
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: res.details.id, waitMs: 8_000 }, sessionFile: 's1.jsonl' })
+  }, 60_000)
+})
+
+describe('report queue vs explicit actions', () => {
+  it('drops a queued report when its record is cleared', async () => {
+    // 失败任务必回报：结束后立刻进队列，5 秒合并窗口后才投递
+    const res = await start({ command: 'echo boom; exit 3', label: '会失败' })
+    await waitDone(res.details.id)
+
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { status: ['failed'] },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.ids).toContain(res.details.id)
+
+    // 合并窗口过去后也不该有条指向已删任务的回报
+    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    expect(sent).toHaveLength(0)
+  }, 30_000)
+
+  it('suppresses the automatic report once bg_stop delivered the terminal state', async () => {
+    const res = await start({ command: 'sleep 20', label: '同步停止' })
+    const stopped = await handle.invoke('tool.execute', {
+      name: 'bg_stop',
+      args: { id: res.details.id, waitMs: 8_000 },
+      sessionFile: 's1.jsonl',
+    })
+    expect(stopped.details.settled).toBe(true)
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    expect(sent).toHaveLength(0)
+    const listed = await handle.invoke('listTasks', {})
+    expect(listed.tasks.find((t) => t.id === res.details.id).report).toBe('suppressed')
+  }, 30_000)
+})
+
+describe('structured output', () => {
+  it('returns the same payload as JSON when asked', async () => {
+    const res = await start({ command: 'echo one' })
+    await waitDone(res.details.id)
+    const listed = await handle.invoke('tool.execute', {
+      name: 'bg_list',
+      args: { format: 'json' },
+      sessionFile: 's1.jsonl',
+    })
+    expect(listed.text).toContain('```json')
+    const payload = JSON.parse(listed.text.split('```json')[1].split('```')[0])
+    expect(payload.tasks.some((t) => t.id === res.details.id)).toBe(true)
+  }, 60_000)
+
+  it('echoes the effective maxBytes when the request was clamped', async () => {
+    const res = await start({ command: 'echo hello-world' })
+    const task = await waitDone(res.details.id)
+    const out = await handle.invoke('tool.execute', {
+      name: 'bg_output',
+      args: { id: task.id, offset: 0, maxBytes: 10 },
+      sessionFile: 's1.jsonl',
+    })
+    expect(out.details.requestedMaxBytes).toBe(10)
+    expect(out.details.effectiveMaxBytes).toBe(64)
+    expect(out.text).toContain('已按 64B')
   }, 60_000)
 })
