@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -211,17 +211,31 @@
         "type": "object",
         "properties": {
           "status": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "exited",
-                "failed",
-                "stopped",
-                "lost",
-                "running"
-              ]
-            },
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "exited",
+                    "failed",
+                    "stopped",
+                    "lost",
+                    "running"
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "exited",
+                  "failed",
+                  "stopped",
+                  "lost",
+                  "running"
+                ]
+              }
+            ],
             "description": "Only clear tasks in these states, e.g. [\"failed\",\"stopped\"]. Omit to clear all finished tasks. A single string is also accepted."
           },
           "keepRunning": {

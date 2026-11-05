@@ -353,6 +353,45 @@ describe('report queue vs explicit actions', () => {
     const listed = await handle.invoke('listTasks', {})
     expect(listed.tasks.find((t) => t.id === res.details.id).report).toBe('suppressed')
   }, 30_000)
+
+  it('keeps the inline receipt promise: a short task never reports again', async () => {
+    // bg_start 的文案写着「它已经结束，不需要再查询，也不会再单独回报」
+    // —— 那就必须真的不再回报，否则这句承诺本身就是 bug。
+    // 用 cmd 跑：bash 在 Windows 上启动动辄 200ms，撞不上 120ms 的内联窗口
+    const res = await start({ command: 'exit /b 3', label: '内联失败', shell: 'cmd' })
+    expect(res.details.returnedInline).toBe(true)
+    expect(res.details.report).toBe('suppressed')
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    expect(sent).toHaveLength(0)
+  }, 30_000)
+
+  it('accepts a single status string in bg_clear', async () => {
+    // 工具描述一直写着「单个字符串也接受」，实现也容错，只有 schema 卡住了
+    const res = await start({ command: 'exit 5', label: '单值清理' })
+    await waitDone(res.details.id)
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { status: 'failed' },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.ids).toContain(res.details.id)
+  }, 30_000)
+
+  it('never reports a task cleared while it was still stopping', async () => {
+    // 真实竞态：bg_clear({keepRunning:false}) 要先等进程退出（最长 3s），
+    // 这段窗口里 exit 回调会去入队——队列若在清完之后才 flush，就是一条孤儿回报。
+    const res = await start({ command: 'sleep 30', label: '边停边清' })
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { status: 'running', keepRunning: false },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.ids).toContain(res.details.id)
+
+    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    expect(sent).toHaveLength(0)
+  }, 30_000)
 })
 
 describe('structured output', () => {
