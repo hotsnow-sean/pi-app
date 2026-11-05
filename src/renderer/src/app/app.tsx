@@ -33,6 +33,7 @@ import { normalizeTimelineMaxAutoExpandedTools, normalizeTimelineVisibleTurns } 
 import { SidePanelHost } from '@renderer/features/side-panels/side-panel-host'
 import { PluginSidebarNav } from '@renderer/features/plugins/plugin-sidebar-nav'
 import { PluginCenterView } from '@renderer/features/plugins/plugin-center-view'
+import { PluginSessionBar } from '@renderer/features/plugins/plugin-session-bar'
 import { usePluginViews } from '@renderer/features/plugins/use-plugin-views'
 import { CHAT_CENTER_VIEW } from '@shared/plugin-manifest'
 import { ExtensionUIHost } from '@renderer/features/extension-ui/extension-ui-host'
@@ -485,7 +486,11 @@ export default function App() {
                   />
                 </Suspense>
               ) : (
-                <Timeline />
+                <>
+                  {/* 会话条：贴着对话顶部，回答「这个会话后台在干什么」。插件自己决定显示与否 */}
+                  <PluginSessionBar />
+                  <Timeline />
+                </>
               )}
               <MainColRightPanelToggle />
               <ComposerDock heroMode={showHome}>
