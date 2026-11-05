@@ -104,9 +104,17 @@ body {
 .run-error { color: var(--err); margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
 .empty { text-align: center; color: var(--text-2); padding: 40px 0; }
 .back-link {
+  display: inline-flex; align-items: center; gap: 4px;
   border: none; background: transparent; color: var(--accent); cursor: pointer;
-  font-size: 13px; padding: 0; font-family: inherit;
+  font-size: 13px; font-family: inherit;
+  padding: 4px 8px; margin: -4px -4px;
+  border-radius: 6px;
+  transition: background-color .15s ease;
 }
+.back-link:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.back-link:active { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.back-link svg { flex: none; transition: transform .15s ease; }
+.back-link:hover svg { transform: translateX(-2px); }
 
 /* ---------- 顶部导航（定时任务 / 运行记录） ---------- */
 .head-nav { display: flex; align-items: baseline; gap: 14px; }
