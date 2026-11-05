@@ -45,6 +45,28 @@ export const pluginViewContributionSchema = z.object({
 export type PluginViewContribution = z.infer<typeof pluginViewContributionSchema>
 
 /**
+ * 会话条贡献点：对话区顶部的一条插件 UI，跟着**当前会话**走。
+ *
+ * 宿主对它的全部理解就是「一条 iframe + 一个位置」：显不显示、多高、画什么，都由插件
+ * 自己决定（它比宿主更清楚哪些任务/成员属于当前会话），所以宿主不做归属反查。
+ * 插件通过 `plugin-content-height` 上报高度，报 0 就塌缩成 0（iframe 仍活着，随时能撑开）。
+ *
+ * 放在对话顶部而不是右栏，是因为它回答的是「我现在这个会话后台在干什么」——
+ * 这个问题要在视线第一落点上，翻面板去确认就已经输了。
+ */
+export const pluginSessionBarContributionSchema = z.object({
+  /** 会话条短 id（插件内唯一） */
+  id: z.string().regex(PLUGIN_ID_PATTERN, 'session bar id must be lowercase alphanumeric/dash'),
+  title: z.string().min(1),
+  /** 入口文档，相对插件目录 */
+  entry: z.string().default('ui/session-bar.html'),
+  /** 默认高度（px）：插件上报实际高度之前的占位，避免加载后跳一下 */
+  height: z.number().int().min(24).max(120).default(44),
+})
+
+export type PluginSessionBarContribution = z.infer<typeof pluginSessionBarContributionSchema>
+
+/**
  * 插件设置项（声明式）。宿主据此在设置页渲染表单，值由宿主持久化，
  * 插件在 main 侧通过 `ctx.settings.get()` 读取、UI 侧通过 `plugin-settings` 消息接收。
  *
@@ -139,6 +161,8 @@ export const pluginManifestSchema = z.object({
   panels: z.array(pluginPanelContributionSchema).default([]),
   /** 中央视图：侧栏「应用」入口 + 中央内容区面板 */
   views: z.array(pluginViewContributionSchema).default([]),
+  /** 会话条：对话顶部的一条插件 UI，跟随当前会话 */
+  sessionBars: z.array(pluginSessionBarContributionSchema).default([]),
   /** 声明式设置项：设置页「插件」里由宿主渲染表单 */
   settings: z.array(pluginSettingFieldSchema).default([]),
   /** 会话级工具：注入 pi 会话，模型可直接调用 */
