@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -38,6 +38,10 @@
             "type": "string",
             "enum": ["auto", "bash", "cmd", "powershell"],
             "description": "Which shell interprets the command. Default 'auto' = bash if available (recommended: the bash tool also runs bash). Use 'cmd'/'powershell' only for native syntax — bash syntax under cmd is rejected instead of silently mangled."
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "description": "Kill the task automatically after this many seconds. Use it as a safety net for servers, watchers and anything that could otherwise run forever (e.g. 600 for a 10-minute build guard). Values under 5s are raised to 5s; max 24h. The task reports back with status 'stopped' and reason 'timeout'."
           }
         },
         "required": ["command"]
@@ -67,6 +71,11 @@
           "waitMs": {
             "type": "number",
             "description": "Wait up to this long (max 30000ms) for NEW output instead of returning immediately. Returns as soon as there is new bytes or the task ends. This is not a wait-for-completion: completion still arrives as an automatic report."
+          },
+          "stream": {
+            "type": "string",
+            "enum": ["out", "err"],
+            "description": "Which stream to read. 'out' (default) is stdout — the task's normal output. 'err' is stderr — where failures and compiler warnings go, and usually only a few lines, so read it first when a task failed."
           }
         },
         "required": ["id"]
@@ -109,6 +118,39 @@
         }
       },
       "card": { "template": "list", "icon": "ListChecks" }
+    },
+    {
+      "name": "bg_rerun",
+      "label": "重跑后台任务",
+      "description": "Run a finished background task again with the same command, cwd, shell and timeout. Use it after fixing whatever made it fail, or when the user says 'run that again'. It always creates a NEW task id (the old record keeps its own result), so quote the new id when talking about it. Cannot rerun a task that is still running — stop it first.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Id of the finished task to rerun, e.g. bg-3." }
+        },
+        "required": ["id"]
+      },
+      "card": { "template": "kv", "icon": "RotateCw" }
+    },
+    {
+      "name": "bg_clear",
+      "label": "清理后台任务记录",
+      "description": "Delete finished task records (and their log files) from the list. Running tasks are kept by default — clearing is for tidying up, not for stopping work. Use it when the list has grown long and the user asks to clean it up. To remove one specific task use the panel's delete button instead.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["exited", "failed", "stopped", "lost"],
+            "description": "Only clear tasks in this state. Omit to clear all finished tasks."
+          },
+          "keepRunning": {
+            "type": "boolean",
+            "description": "Default true. Set false to also delete running tasks — it stops them first. Only do this when the user explicitly wants everything gone."
+          }
+        }
+      },
+      "card": { "template": "kv", "icon": "Eraser" }
     }
   ],
   "settings": [

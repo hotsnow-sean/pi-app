@@ -107,3 +107,22 @@ body {
 }
 .report-badge.sent { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
 .report-badge.failed { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, var(--border)); }
+
+/* ---------- stdout / stderr 切换 ---------- */
+.streams { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.stream-tab {
+  border: 1px solid transparent; background: transparent; color: var(--text-2);
+  font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+}
+.stream-tab:hover { background: var(--bg); color: var(--text); }
+.stream-tab.active { background: var(--bg); border-color: var(--border); color: var(--text); }
+.stream-tab .n { opacity: .7; margin-left: 5px; }
+.stream-tab.err.active { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, var(--border)); }
+.out.err { color: var(--err); }
+
+/* 顶栏的清空按钮：只在有终态记录时出现，视觉上不抢戏 */
+.ghost-btn {
+  border: 1px solid var(--border); background: transparent; color: var(--text-2);
+  font-family: inherit; font-size: 12px; padding: 2px 9px; border-radius: 6px; cursor: pointer;
+}
+.ghost-btn:hover { background: var(--card); color: var(--text); }
