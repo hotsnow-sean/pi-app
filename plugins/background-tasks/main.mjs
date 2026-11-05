@@ -484,13 +484,32 @@ function recover() {
 
   probeTimer = setInterval(() => {
     let changed = false
+    const cap = Math.max(1, Number(settings.maxLogMb) || DEFAULT_MAX_LOG_MB) * 1024 * 1024
     for (const task of state.tasks) {
-      if (task.status !== 'running' || !task.recovered) continue
-      if (alive(task.pid)) continue
-      task.status = 'lost'
-      task.endedAt = task.endedAt ?? Date.now()
-      changed = true
-      scheduleReport(task)
+      if (task.status !== 'running') continue
+      // 接管来的任务没有 exit 事件，只能轮询 pid
+      if (task.recovered && !alive(task.pid)) {
+        task.status = 'lost'
+        task.endedAt = task.endedAt ?? Date.now()
+        changed = true
+        scheduleReport(task)
+        continue
+      }
+      // 日志上限：别让一个 while(true) 打满磁盘
+      try {
+        const size = fs.statSync(task.logPath).size
+        if (size !== task.bytes) {
+          task.bytes = size
+          changed = true
+        }
+        if (size > cap) {
+          task.error = `日志超过 ${Math.round(cap / 1024 / 1024)}MB 上限，已停止`
+          stopTask(task, true)
+          changed = true
+        }
+      } catch {
+        /* 文件暂时不可读，下一轮再看 */
+      }
     }
     if (changed) save()
   }, PROBE_MS)
