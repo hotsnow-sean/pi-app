@@ -1,0 +1,136 @@
+{
+  "id": "background-tasks",
+  "name": "后台任务",
+  "version": "0.1.0",
+  "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
+  "icon": "Timer",
+  "main": "main.mjs",
+  "views": [
+    {
+      "id": "main",
+      "title": "后台任务",
+      "description": "任务列表、命令与输出、停止与清理",
+      "icon": "Timer",
+      "entry": "ui/index.html"
+    }
+  ],
+  "tools": [
+    {
+      "name": "bg_start",
+      "label": "启动后台任务",
+      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Note: detached background processes do not obey the abort key; stop them with bg_stop.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The shell command to run, exactly as you would type it in a terminal (cmd on Windows, sh elsewhere)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Short human-readable name shown in the task list, e.g. '构建桌面端' or 'npm test'. Defaults to the first line of the command."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Working directory. Defaults to the current session's working directory — only set it to run somewhere else."
+          }
+        },
+        "required": ["command"]
+      },
+      "card": { "template": "kv", "icon": "Play" }
+    },
+    {
+      "name": "bg_output",
+      "label": "读取后台任务输出",
+      "description": "Read a background task's output. Call it with only an id to get the tail; pass nextOffset from a previous call to read only what is new. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Task id, e.g. bg-3." },
+          "offset": {
+            "type": "number",
+            "description": "Byte offset to continue from; omit to read the tail of the log."
+          },
+          "tailLines": {
+            "type": "number",
+            "description": "When reading the tail, how many last lines to return (default 20, max 500)."
+          },
+          "maxBytes": {
+            "type": "number",
+            "description": "Maximum bytes to read in this call (default 16KB, max 256KB)."
+          }
+        },
+        "required": ["id"]
+      },
+      "card": { "template": "kv", "icon": "FileText" }
+    },
+    {
+      "name": "bg_stop",
+      "label": "停止后台任务",
+      "description": "Stop a running background task and its whole process tree. Use it when the user asks to abandon something, or when a task is clearly stuck or was started by mistake.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Task id, e.g. bg-3." },
+          "force": {
+            "type": "boolean",
+            "description": "Kill immediately instead of asking the process to exit first."
+          }
+        },
+        "required": ["id"]
+      },
+      "card": { "template": "kv", "icon": "Square" }
+    },
+    {
+      "name": "bg_list",
+      "label": "列出后台任务",
+      "description": "List background tasks with their status, duration and exit code. Use it at the start of a conversation to see what is already running, or when the user asks 'what is still going'.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["running", "exited", "failed", "stopped", "lost"],
+            "description": "Only list tasks in this state."
+          }
+        }
+      },
+      "card": { "template": "list", "icon": "ListChecks" }
+    }
+  ],
+  "settings": [
+    {
+      "key": "reportPolicy",
+      "type": "select",
+      "label": "任务完成后回报",
+      "description": "回报会把结果投回发起任务的会话，让 agent 接着干。选「不回报」时任务照常跑，只是要你自己去面板看。",
+      "default": "long",
+      "options": [
+        { "value": "all", "label": "每个任务都回报" },
+        { "value": "long", "label": "只回报长任务与失败的" },
+        { "value": "failures", "label": "只回报失败的" },
+        { "value": "off", "label": "不回报，只更新面板" }
+      ]
+    },
+    {
+      "key": "reportThresholdMs",
+      "type": "number",
+      "label": "「长任务」阈值（毫秒）",
+      "description": "超过这个时长的成功任务才算值得打断你。默认 15000（15 秒）。",
+      "default": 15000,
+      "min": 1000,
+      "max": 600000,
+      "step": 1000
+    },
+    {
+      "key": "maxLogMb",
+      "type": "number",
+      "label": "单个任务日志上限（MB）",
+      "description": "输出超过上限后会停止写入主日志，避免磁盘被刷爆。",
+      "default": 50,
+      "min": 1,
+      "max": 500,
+      "step": 1
+    }
+  ]
+}

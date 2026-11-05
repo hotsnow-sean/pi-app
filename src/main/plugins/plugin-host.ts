@@ -99,6 +99,20 @@ async function runAgentPrompt(opts: {
 function buildContext(pluginId: string) {
   return {
     pluginId,
+    /**
+     * 插件的私有目录（`<userData>/plugin-data/<id>`），已确保存在。
+     * storage 只存小 JSON；日志、缓存、下载这类体积内容必须落到这里，
+     * 不能写安装目录（内置插件可能装在只读位置）也不能写会话工作区。
+     */
+    dataDir: (() => {
+      const dir = pluginDataDir(pluginId)
+      try {
+        fs.mkdirSync(dir, { recursive: true })
+      } catch {
+        /* 建不出来就让调用方在写文件时报错，别在这里炸激活流程 */
+      }
+      return dir
+    })(),
     storage: {
       get: (): Record<string, unknown> => readStorage(pluginId),
       set: (data: Record<string, unknown>): void => writeStorage(pluginId, data),
