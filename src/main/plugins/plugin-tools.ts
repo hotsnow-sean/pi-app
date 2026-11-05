@@ -75,13 +75,22 @@ export async function handlePluginToolRequest(
   const pluginId = String(msg.pluginId ?? '')
   const tool = String(msg.tool ?? '')
   const args = (msg.args ?? {}) as Record<string, unknown>
+  // 谁发起的调用：插件执行体在 main，本来够不到会话，只能由 worker 带过来
+  const sessionFile = typeof msg.sessionFile === 'string' ? msg.sessionFile : ''
+  const cwd = typeof msg.cwd === 'string' ? msg.cwd : ''
   if (!callId) return
 
   const controller = new AbortController()
   running.set(callId, { pluginId, controller })
   let result: ToolResultPayload
   try {
-    const r = await invokePlugin(pluginId, 'tool.execute', { name: tool, args, signal: controller.signal })
+    const r = await invokePlugin(pluginId, 'tool.execute', {
+      name: tool,
+      args,
+      sessionFile,
+      cwd,
+      signal: controller.signal,
+    })
     result =
       r.ok === true
         ? normalizeResult(r.result)

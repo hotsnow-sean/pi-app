@@ -14,6 +14,7 @@ import { resolveInteractByTool } from '../extension-compat/adapter-loader.js'
 import { extractJsonPath, extractStatusFromOutput } from '../extension-compat/json-path.js'
 import { extractCodemodeArgField, parseCodemodeCalls } from '@shared/tool-call-detail'
 import { enrichToolChildSessionFiles } from '../extension-compat/tool-child-session.js'
+import { pluginMessageText } from './worker-timeline.js'
 import type { DesktopUIBridge } from './desktop-ui-bridge.js'
 import { lastAssistantFromMessages } from './session-event-helpers.js'
 import { sendToMain } from './worker-transport.js'
@@ -190,6 +191,20 @@ export function handleSessionEvent(event: AgentSessionEvent, deps: SessionEventD
           text: normalizeUserMessageDisplayText(extractTextFromPiMessage(msg)),
         } as AppEvent)
         lastUserPreview = normalizeUserMessageDisplayText(extractTextFromPiMessage(msg))
+      } else {
+        // 插件投递的回报（sessions.send）：占「用户位」但不是用户本人说的。
+        // 正文自带来源前缀（如「【后台任务回报】」），这里按 user message 实时透出，
+        // 重开会话时由 worker-timeline 的同名判定补上同一条。
+        const pluginText = pluginMessageText(msg)
+        if (pluginText) {
+          deps.emit({
+            ...base,
+            type: 'message',
+            role: 'user',
+            phase: 'start',
+            text: normalizeUserMessageDisplayText(pluginText),
+          } as AppEvent)
+        }
       }
       break
     }
