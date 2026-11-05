@@ -134,6 +134,17 @@ export function sessionStoreApi(key: string, nextItemId: () => string): StoreApi
     },
     clearPendingQueue: () => updateSession(key, () => ({ pendingSteering: [], pendingFollowUp: [] })),
     setComposerWidget: (widget) => updateSession(key, () => ({ composerWidget: widget })),
+    setPluginComposerBar: (pluginId, bar) =>
+      updateSession(key, (e) => {
+        const current = e.pluginComposerBars[pluginId]
+        if (!bar) {
+          if (!current) return null
+          const next = { ...e.pluginComposerBars }
+          delete next[pluginId]
+          return { pluginComposerBars: next }
+        }
+        return { pluginComposerBars: { ...e.pluginComposerBars, [pluginId]: bar } }
+      }),
   }
 
   function get(): UIState {

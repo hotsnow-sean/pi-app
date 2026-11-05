@@ -21,6 +21,7 @@ import { ComposerToolsMenu } from './composer-tools-menu'
 import { ComposerMetricsInline } from './composer-metrics-inline'
 import { ComposerPendingQueue } from './composer-pending-queue'
 import { ComposerAdapterWidgetHost } from './composer-adapter-widget-host'
+import { ComposerPluginBars } from './composer-plugin-bar'
 import { useComposerMetrics } from './use-composer-metrics'
 import { refreshComposerRunDisplay } from '@renderer/lib/composer-run-display'
 import { useComposerInputHistory } from './use-composer-input-history'
@@ -454,7 +455,8 @@ export function Composer() {
           )}
         </div>
       )}
-      <div className="composer-accessory-row flex min-w-0 gap-2">
+      <div className="composer-accessory-row flex min-w-0 flex-wrap gap-2">
+        <ComposerPluginBars />
         <ComposerAdapterWidgetHost />
         <ComposerAgentActivity
           composerAnchorRef={slashPopoverAnchorRef}

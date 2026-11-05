@@ -86,5 +86,8 @@ function applySessionEvent(
       applyExtensionWidgetEvent(event)
       api.get().setComposerWidget(getSessionComposerWidget(sessionFile))
       break
+    case 'plugin_widget':
+      api.get().setPluginComposerBar(event.pluginId, event.bar)
+      break
   }
 }

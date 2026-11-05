@@ -857,6 +857,13 @@
     min-width: 0;
     overflow: hidden;
   }
+  /* 插件托盘独占一整行：任务名被截断比多占 28px 难受；两个插件托盘同时存在时各占一行 */
+  .composer-accessory-row > .adapter-widget-shell[data-plugin-bar] {
+    flex: 1 1 100%;
+  }
+  .composer-accessory-row > .adapter-widget-shell[data-plugin-bar] .adapter-widget-expand-inner {
+    padding: 0 2px;
+  }
   .adapter-widget-ring circle {
     fill: none;
     stroke-width: 2;

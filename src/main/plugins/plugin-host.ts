@@ -5,6 +5,8 @@ import { Notification, app } from 'electron'
 import { findPlugin, setPluginEnabled } from './plugin-manager'
 import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import { askInHost, cancelPluginUIRequests } from './plugin-ui'
+import { publishPluginComposerBar } from './plugin-composer-bar'
+import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
 import { cancelPluginToolCallsFor, pluginToolDescriptors } from './plugin-tools'
 import { workerManager } from '../worker-manager'
 import { PLUGIN_MESSAGE_CUSTOM_TYPE, type PluginMessageOrigin } from '@shared/plugin-message'
@@ -147,6 +149,21 @@ function buildContext(pluginId: string) {
         questions: PluginUIQuestion[],
         opts?: { timeoutMs?: number; signal?: AbortSignal },
       ): Promise<PluginUIQuestionnaireResult> => askInHost(pluginId, questions, opts),
+      /**
+       * 输入框上方那条托盘。插件推什么、宿主画什么样；bar 传 null 表示这个会话没有东西可显示。
+       *
+       * 这是插件第一次能主动改 UI（此前只能被 iframe 反向 invoke）。刻意做得很窄：
+       * 只有摘要 + 若干行 + 一个右栏面板 id，宿主不解释业务语义，插件也别指望在这里做大版面——
+       * 详情仍然归右栏面板。
+       */
+      setComposerBar: (sessionFile: string, bar: PluginComposerBarState | null): void => {
+        const file = String(sessionFile || '').trim()
+        if (!file) {
+          console.warn(`[plugin:${pluginId}] setComposerBar without sessionFile ignored`)
+          return
+        }
+        publishPluginComposerBar(pluginId, file, bar)
+      },
     },
     runAgentPrompt,
     /**

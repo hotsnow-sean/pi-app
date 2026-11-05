@@ -1,4 +1,5 @@
 import type { AdapterWidgetProjection } from '@shared/adapter-widget'
+import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
 import type { AppEvent } from '@shared/app-events'
 import type { ToolCallDetail } from '@shared/tool-call-detail'
 import type { RightPanelCatalogItem, RightPanelPrefs } from '@shared/right-panels'
@@ -289,8 +290,11 @@ export interface UIState {
   setPendingQueue: (steering: string[], followUp: string[]) => void
   clearPendingQueue: () => void
   composerWidget: AdapterWidgetProjection | null
+  /** 插件推到输入框上方的摘要，按 pluginId 归并；null/缺省 = 这个插件没话说 */
+  pluginComposerBars: Record<string, PluginComposerBarState>
   adapterWidgetExpandedBySession: Record<string, boolean>
   setComposerWidget: (state: AdapterWidgetProjection | null) => void
+  setPluginComposerBar: (pluginId: string, bar: PluginComposerBarState | null) => void
   toggleAdapterWidget: (key: string) => void
   /** Conversation state per session (normalized sessionFile or a draft key). */
   sessionStates: Record<string, SessionState>

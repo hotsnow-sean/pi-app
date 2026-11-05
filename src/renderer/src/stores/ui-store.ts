@@ -309,8 +309,20 @@ export const useUIStore = create<UIState>()(
   pendingSteering: [],
   pendingFollowUp: [],
   composerWidget: null,
+  pluginComposerBars: {},
   adapterWidgetExpandedBySession: {},
   setComposerWidget: (state) => set({ composerWidget: state }),
+  setPluginComposerBar: (pluginId, bar) =>
+    set((s) => {
+      const current = s.pluginComposerBars[pluginId]
+      if (!bar) {
+        if (!current) return {}
+        const next = { ...s.pluginComposerBars }
+        delete next[pluginId]
+        return { pluginComposerBars: next }
+      }
+      return { pluginComposerBars: { ...s.pluginComposerBars, [pluginId]: bar } }
+    }),
   toggleAdapterWidget: (key) =>
     set((s) => ({
       adapterWidgetExpandedBySession: {
