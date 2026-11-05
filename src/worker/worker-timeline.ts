@@ -7,6 +7,7 @@ import {
   type PiSessionMessage,
 } from '@shared/worker-message'
 import { markTrailingIncompleteAssistants } from '@shared/timeline-incomplete'
+import { PLUGIN_MESSAGE_CUSTOM_TYPE } from '@shared/plugin-message'
 
 let msgSeq = 0
 /**
@@ -28,6 +29,29 @@ export function resetTimelineSeq(): void {
 const extractText = extractTextFromPiMessage
 const extractThinking = extractThinkingFromPiMessage
 const extractToolResult = extractToolResultFromPiMessage
+
+/**
+ * 插件投递消息（`sessions.send`）的正文，非插件消息返回 null。
+ *
+ * 这类消息 `role` 是 `custom`，占的是「用户位」——不处理的话模型看得到、时间线看不见，
+ * 用户重开会话才发现对话里少了一轮。`display === false` 的是隐藏上下文（只进模型、
+ * 不进界面），必须在这里挡掉。
+ */
+export function pluginMessageText(message: unknown): string | null {
+  const m = message as
+    | { role?: string; customType?: string; content?: unknown; display?: boolean }
+    | null
+  if (!m || m.role !== 'custom') return null
+  if (m.customType !== PLUGIN_MESSAGE_CUSTOM_TYPE) return null
+  if (m.display === false) return null
+  const content = m.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => (block as { type?: string })?.type === 'text')
+    .map((block) => String((block as { text?: string }).text ?? ''))
+    .join('\n')
+}
 
 /** Always keep assistant rows (even empty) so incomplete turns remain rewound-able. */
 function pushAssistantItem(
@@ -73,8 +97,9 @@ export function normalizeMessages(messages: unknown[]): Array<Record<string, unk
     const ts = piMessageTimestamp(pm, now)
     const content = Array.isArray(pm.content) ? pm.content : []
 
-    if (pm.role === 'user') {
-      const text = normalizeUserMessageDisplayText(extractText(pm))
+    const pluginText = pluginMessageText(pm)
+    if (pm.role === 'user' || pluginText !== null) {
+      const text = pluginText ?? normalizeUserMessageDisplayText(extractText(pm))
       if (text) items.push({ id: nextHistId(), type: 'user-message', text, timestamp: ts })
     } else if (pm.role === 'assistant') {
       const text = extractText(pm)
@@ -200,8 +225,9 @@ export function timelineItemsFromBranchPath(path: unknown[]): Array<Record<strin
     const m = e.message
     const content = m.content || []
 
-    if (m.role === 'user') {
-      const text = normalizeUserMessageDisplayText(extractText(m))
+    const pluginText = pluginMessageText(m)
+    if (m.role === 'user' || pluginText !== null) {
+      const text = pluginText ?? normalizeUserMessageDisplayText(extractText(m))
       // Keep empty user only if we have an entry id (rare); normally require text.
       if (text || sid) {
         items.push({

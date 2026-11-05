@@ -132,6 +132,145 @@ export async function handlePrompt(msg: WorkerIncomingMessage, reply: WorkerRepl
 }
 
 
+/**
+ * 插件向**宿主会话**投递消息（ctx.sessions.send 的 worker 端）。
+ *
+ * 与 handlePrompt 的区别：落盘是 custom_message 而非 user message——
+ * 消息照样进模型上下文、驱动完整一轮，但 `details`（来源标注）只给界面看，
+ * 界面据此渲染「后台任务 → 会话」的回报行而不是冒充用户输入。
+ * worker 事件流对 custom message 的实时转发（worker-session-events.ts）原样复用。
+ */
+type CustomAppMessage = {
+  /** SDK 的 custom 消息固定 role:"custom"（sendCustomMessage 内部补的字段） */
+  role: 'custom'
+  customType: string
+  content: string
+  display: boolean
+  details?: unknown
+}
+
+/**
+ * SDK 缺口补丁：`sendCustomMessage({triggerTurn})` 直达 `_runAgentPrompt`，跳过了
+ * `prompt()` 在首轮请求前做的两件事——dispatch `before_agent_start`（desktop 能力段
+ * 就是在这里并入 systemPromptOptions 的）和 `_preparePromptAndToolLoadout`（生成
+ * system 补丁消息随请求发出）。后果：**全新会话的第一轮请求整段没有 system**
+ * （实测：首轮 system 为空，第二轮起由 agent.prepareNextTurnWithContext 兜底恢复）。
+ *
+ * 这里按 `prompt()` 的顺序补齐（窄类型断言，模式同 plugin-sessions 的 `_rewriteFile`）：
+ * 返回随请求发送的消息数组（system 补丁 + custom 消息）；SDK 内部结构对不上或任何
+ * 一步失败时返回 null，调用方退回原生 sendCustomMessage——退化成现状，不会更坏。
+ * 仅空闲首轮流需要；run 内的后续请求由 agent.prepareNextTurnWithContext 兜底。
+ *
+ * 注意：本函数自身不抛错——错误传播路径必须保持与原生 sendCustomMessage 一致
+ * （单层 await 直达 handleCustomPrompt 的 catch，状态复位/agent_error 时序不能变）。
+ */
+async function prepareFirstTurnMessages(
+  session: NonNullable<typeof st.session>,
+  appMessage: CustomAppMessage,
+): Promise<unknown[] | null> {
+  type SessionInternals = {
+    _baseSystemPromptOptions?: Record<string, unknown>
+    _extensionRunner?: {
+      emitBeforeAgentStart?: (
+        text: string,
+        images: unknown,
+        options: Record<string, unknown>,
+      ) => Promise<{ systemPromptOptions?: Record<string, unknown> } | undefined>
+    }
+    getActiveToolNames?: () => string[]
+    _preparePromptAndToolLoadout?: (options: Record<string, unknown>) => unknown
+    _runSystemPromptOptions?: unknown
+    _isEmittingAgentSettled?: boolean
+  }
+  try {
+    const s = session as unknown as SessionInternals
+    // agent settled 发射窗口内交回原生路径：原生分支会正确地把动作排进 deferred 队列
+    if (s._isEmittingAgentSettled === true) return null
+    const base = s._baseSystemPromptOptions
+    const emitBefore = s._extensionRunner?.emitBeforeAgentStart?.bind(s._extensionRunner)
+    const prepare = s._preparePromptAndToolLoadout?.bind(session)
+    if (!base || !emitBefore || !prepare) return null
+    // 与 prompt() 一致：before_agent_start 先行（能力段在这里并入），随后生成
+    // system 补丁并作为请求首消息发出。before_agent_start 的 result.messages
+    // （扩展注入的额外消息）worker 侧扩展不使用，这里不带。
+    const result = await emitBefore('', undefined, base)
+    const options = { ...(result?.systemPromptOptions ?? base) }
+    if (typeof s.getActiveToolNames === 'function') options.selectedTools = s.getActiveToolNames()
+    const update = prepare(options)
+    s._runSystemPromptOptions = options
+    return update ? [update, appMessage] : [appMessage]
+  } catch {
+    return null
+  }
+}
+
+export async function handleCustomPrompt(msg: WorkerIncomingMessage, reply: WorkerReply): Promise<void> {
+  const session = st.session
+  if (!session) { reply({ type: 'error', error: 'No session' }); return }
+  const message = msg.message as
+    | { customType?: string; content?: string; display?: boolean; details?: unknown }
+    | undefined
+  if (!message || typeof message.customType !== 'string' || typeof message.content !== 'string') {
+    reply({ type: 'error', error: 'customPrompt requires message.customType & message.content' })
+    return
+  }
+  st.promptSent = true
+  const alreadyStreaming = session.isStreaming || st.agentTurnActive
+  if (!alreadyStreaming) {
+    beginRunIdentity()
+    st.agentTurnActive = true
+    st.promptPreflightActive = true
+    emit({ ...baseEvent(), type: 'run', phase: 'started' })
+  }
+  reply({ type: 'customPrompt-done' })
+  void (async () => {
+    try {
+      // streaming 中不强制开新轮：SDK 的 triggerTurn 只在空闲时生效，
+      // 排队语义默认 followUp，插件可用 options.deliverAs 显式指定
+      const opts = (msg.options ?? {}) as { deliverAs?: 'steer' | 'followUp' | 'nextTurn' }
+      const appMessage: CustomAppMessage = {
+        role: 'custom',
+        customType: message.customType as string,
+        content: message.content as string,
+        display: message.display !== false,
+        details: message.details,
+      }
+      if (alreadyStreaming) {
+        await session.sendCustomMessage(appMessage, { deliverAs: opts.deliverAs ?? 'followUp' })
+      } else {
+        // 空闲首轮流：补 system 准备（见 prepareFirstTurnMessages）；拿不到内部结构
+        // 就走原生 sendCustomMessage。两条路的错误都从这里的 await 直达外层 catch。
+        const messages = await prepareFirstTurnMessages(session, appMessage)
+        if (messages) {
+          const run = (session as unknown as { _runAgentPrompt?: (m: unknown[]) => Promise<void> })._runAgentPrompt
+          await run!.call(session, messages)
+        } else {
+          await session.sendCustomMessage(appMessage, { triggerTurn: true })
+        }
+      }
+      if (!alreadyStreaming && st.promptPreflightActive) {
+        st.promptPreflightActive = false
+        st.agentTurnActive = false
+        emit({ ...baseEvent(), type: 'run', phase: 'idle' })
+      }
+    } catch (e: unknown) {
+      console.error('[Worker] customPrompt failed:', e)
+      if (st.promptPreflightActive) {
+        st.promptPreflightActive = false
+        st.agentTurnActive = false
+        emit({
+          ...baseEvent(),
+          type: 'agent_error',
+          text: errorMessage(e),
+          kind: 'error',
+          stopReason: 'error',
+        })
+        emit({ ...baseEvent(), type: 'run', phase: 'failed' })
+      }
+    }
+  })()
+}
+
 export async function handleAbort(msg: WorkerIncomingMessage, reply: WorkerReply): Promise<void> {
   const session = st.session
   if (!session) {

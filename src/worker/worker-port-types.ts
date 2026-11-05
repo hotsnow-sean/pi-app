@@ -6,6 +6,8 @@ export type WorkerIncomingMessage = {
   sdkPath?: string | null
   text?: string
   options?: unknown
+  /** customPrompt 专用：{ customType, content, display?, details? } */
+  message?: unknown
   sessionFile?: string
   offset?: number
   limit?: number

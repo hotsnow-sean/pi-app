@@ -5,7 +5,9 @@ import { Notification, app } from 'electron'
 import { findPlugin, setPluginEnabled } from './plugin-manager'
 import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import { askInHost, cancelPluginUIRequests } from './plugin-ui'
-import { cancelPluginToolCallsFor } from './plugin-tools'
+import { cancelPluginToolCallsFor, pluginToolDescriptors } from './plugin-tools'
+import { workerManager } from '../worker-manager'
+import { PLUGIN_MESSAGE_CUSTOM_TYPE, type PluginMessageOrigin } from '@shared/plugin-message'
 import type { PluginManifest } from '@shared/plugin-manifest'
 import type { PluginUIQuestion, PluginUIQuestionnaireResult } from '@shared/plugin-ui'
 import { errorMessage } from '@shared/error-message'
@@ -133,6 +135,60 @@ function buildContext(pluginId: string) {
       ): Promise<PluginUIQuestionnaireResult> => askInHost(pluginId, questions, opts),
     },
     runAgentPrompt,
+    /**
+     * 会话：插件向**用户自己的宿主会话**投递消息并驱动一轮。
+     *
+     * 与 runAgentPrompt 的区别是「落在哪」：runAgentPrompt 另起一个 inMemory 会话，
+     * 用户看不见、历史不连续；这里投进用户正在用的那个会话，接上原有上下文。
+     * 后台任务的完成回报必须走这条——否则模型得靠用户在两个会话之间人肉转述。
+     *
+     * 投递是「定向到会话」而不是「定向到前台」：目标会话没有活 worker 时，
+     * 宿主按会话 meta.cwd 冷启动，用户切到别的会话不影响投递。
+     */
+    sessions: {
+      send: async (spec: {
+        sessionFile: string
+        content: string
+        origin?: PluginMessageOrigin
+        deliverAs?: 'steer' | 'followUp' | 'nextTurn'
+      }): Promise<void> => {
+        const { sessionFile, content, origin, deliverAs } = spec
+        if (!sessionFile?.trim()) throw new Error('sessions.send: sessionFile required')
+        if (!content?.trim()) throw new Error('sessions.send: content required')
+        // 插件工具目录通常随用户每次 prompt 下发（prompt.send → applyPluginTools）；
+        // 但这条链路是 main 直接驱动目标会话（冷启动 worker 不经过 prompt.send），
+        // 不补发的话目标会话一个插件工具都没有——回报里让模型调 bg_output 会报
+        // "Tool not found"。
+        try {
+          await workerManager.setPluginTools(pluginToolDescriptors(), sessionFile)
+        } catch {
+          /* 工具同步失败不拦投递：与 prompt.send 的容错一致 */
+        }
+        await workerManager.sendCustomPrompt(
+          sessionFile,
+          {
+            customType: PLUGIN_MESSAGE_CUSTOM_TYPE,
+            content,
+            display: true,
+            details: origin,
+          },
+          { deliverAs },
+        )
+      },
+      /**
+       * 订阅会话运行事件（started / running / idle / failed / cancelled）。
+       *
+       * 用途不是「判断能不能投递」（send 自己处理忙闲），而是决定投递语义：
+       * 目标会话正在跑一轮时用 followUp 排队而不是 steer 打断。
+       * 返回解除订阅函数——插件停用/重载时必须调用，否则回调悬空。
+       */
+      onRunEvent: (
+        handler: (payload: { sessionFile: string; phase: string; cwd: string }) => void,
+      ): (() => void) => {
+        if (typeof handler !== 'function') throw new Error('sessions.onRunEvent: handler required')
+        return workerManager.onSessionRunEvent(handler)
+      },
+    },
     log: (...args: unknown[]): void => console.log(`[plugin:${pluginId}]`, ...args),
   }
 }

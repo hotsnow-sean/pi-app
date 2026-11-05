@@ -22,6 +22,22 @@ type ToolResultPayload = {
 }
 
 let api: ExtensionAPI | null = null
+/**
+ * 发起调用的会话信息。工具执行体在 Main 进程，本来拿不到「谁在调我」；
+ * 但插件常常需要这个——后台任务要知道把完成回报投回哪个会话。
+ * worker-runtime 在初始化时把活的 state 接进来（不直接 import 是为了避开循环依赖）。
+ */
+let sessionInfo: () => { sessionFile: string | null; cwd: string | null } = () => ({
+  sessionFile: null,
+  cwd: null,
+})
+
+export function setPluginToolSessionResolver(
+  resolver: () => { sessionFile: string | null; cwd: string | null },
+): void {
+  sessionInfo = resolver
+}
+
 let catalog: PluginToolDescriptor[] = []
 /** 本 Worker 生命周期内注册过的工具名（pi 不允许重名注册，只能注册一次） */
 const registered = new Set<string>()
@@ -70,7 +86,16 @@ function callMain(def: PluginToolDescriptor, args: unknown, signal?: AbortSignal
       sendToMain({ type: 'plugin-tool-cancel', callId })
       reject(new Error('aborted'))
     })
-    sendToMain({ type: 'plugin-tool-request', callId, pluginId: def.pluginId, tool: def.name, args })
+    const info = sessionInfo()
+    sendToMain({
+      type: 'plugin-tool-request',
+      callId,
+      pluginId: def.pluginId,
+      tool: def.name,
+      args,
+      sessionFile: info.sessionFile,
+      cwd: info.cwd,
+    })
   })
 }
 
