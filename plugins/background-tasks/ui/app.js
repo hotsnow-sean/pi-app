@@ -64,8 +64,10 @@ window.addEventListener('keydown', (event) => {
 const state = {
   tasks: [],
   open: null,
-  /** id → { offset, text }：展开行的增量读游标与已拉到的文本 */
+  /** `${id}:${stream}` → { offset, text }：每个流独立的增量读游标 */
   outputs: new Map(),
+  /** id → 'out' | 'err'：这个任务当前看的是哪个流 */
+  streams: new Map(),
   policy: 'long',
   thresholdMs: 15000,
   serverNow: Date.now(),
@@ -107,9 +109,22 @@ function statusText(task) {
   if (task.status === 'running') return `已运行 ${fmtDuration(state.serverNow - task.startedAt)}`
   if (task.status === 'exited') return `已完成 · ${fmtDuration((task.endedAt || task.startedAt) - task.startedAt)}`
   if (task.status === 'failed') return `退出码 ${task.exitCode === null || task.exitCode === undefined ? '?' : task.exitCode}`
-  if (task.status === 'stopped') return task.stopReason === 'log-limit' ? '已停止（日志超限）' : '已停止'
+  if (task.status === 'stopped') {
+    if (task.stopReason === 'log-limit') return '已停止（日志超限）'
+    if (task.stopReason === 'timeout') return '已超时终止'
+    return '已停止'
+  }
   if (task.status === 'lost') return '状态丢失'
   return task.status
+}
+
+/** 这个任务有没有独立的 stderr 可看（旧任务只有合并日志） */
+function hasErr(task) {
+  return !!task.errPath && ((task.errBytes || 0) > 0 || task.status === 'failed' || task.stopReason === 'timeout')
+}
+
+function streamOf(id) {
+  return state.streams.get(id) === 'err' ? 'err' : 'out'
 }
 
 function esc(text) {
@@ -143,6 +158,14 @@ function rowHtml(task) {
   const open = state.open === task.id
   const metaClass = task.status === 'failed' ? 'row-meta failed' : 'row-meta'
   const size = fmtBytes(task.bytes)
+  const errSize = fmtBytes(task.errBytes)
+  const stream = streamOf(task.id)
+  const tabs = hasErr(task)
+    ? `<div class="streams">
+        <button class="stream-tab${stream === 'out' ? ' active' : ''}" data-act="stream" data-stream="out" data-id="${esc(task.id)}">stdout</button>
+        <button class="stream-tab err${stream === 'err' ? ' active' : ''}" data-act="stream" data-stream="err" data-id="${esc(task.id)}">stderr${errSize ? `<span class="n">${errSize}</span>` : ''}</button>
+      </div>`
+    : ''
   return `
   <div class="row${open ? ' open' : ''}" data-id="${esc(task.id)}">
     <div class="row-head">
@@ -154,12 +177,14 @@ function rowHtml(task) {
     </div>
     <div class="row-body">
       <div class="cmd" title="${esc(`${task.shell || ''} · ${task.cwd}`)}">${esc(task.command)}</div>
-      <pre class="out" data-out="${esc(task.id)}"></pre>
+      ${tabs}
+      <pre class="out${stream === 'err' ? ' err' : ''}" data-out="${esc(task.id)}"></pre>
       <div class="foot">
         ${reportBadge(task)}
+        ${task.timeoutMs ? `<span class="report-badge">超时 ${fmtDuration(task.timeoutMs)}</span>` : ''}
         <span class="path" title="${esc(task.logPath)}">${esc(task.logPath)}${size ? ` · ${size}` : ''}</span>
         ${task.report === 'failed' || task.report === 'skipped' ? `<button class="link-btn" data-act="retry" data-id="${esc(task.id)}">重新回报</button>` : ''}
-        ${running ? '<button class="link-btn" data-act="stop" data-id="' + esc(task.id) + '">停止</button>' : `<button class="link-btn" data-act="remove" data-id="${esc(task.id)}">删除记录</button>`}
+        ${running ? `<button class="link-btn" data-act="stop" data-id="${esc(task.id)}">停止</button>` : `<button class="link-btn" data-act="rerun" data-id="${esc(task.id)}">重跑</button><button class="link-btn" data-act="remove" data-id="${esc(task.id)}">删除记录</button>`}
       </div>
     </div>
   </div>`
@@ -167,11 +192,13 @@ function rowHtml(task) {
 
 function rebuild() {
   const counts = state.tasks.filter((t) => t.status === 'running').length
+  const finished = state.tasks.length - counts
   const head = `
   <div class="head">
     <h1>后台任务</h1>
     <span class="count" data-field="count">${counts ? `${counts} 个运行中` : `${state.tasks.length} 条记录`}</span>
     <span class="spacer"></span>
+    ${finished ? '<button class="ghost-btn" data-act="clear">清空已结束</button>' : ''}
     <span class="policy" data-field="policy">完成后：${esc(POLICY_TEXT[state.policy] || state.policy)}</span>
   </div>`
   if (!state.tasks.length) {
@@ -207,8 +234,10 @@ function updateMeta() {
 function paintOutput(id) {
   const pre = root.querySelector(`pre[data-out="${id}"]`)
   if (!pre) return
-  const entry = state.outputs.get(id)
+  const stream = streamOf(id)
+  const entry = state.outputs.get(`${id}:${stream}`)
   const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40
+  pre.classList.toggle('err', stream === 'err')
   pre.textContent = entry?.text || ''
   if (atBottom) pre.scrollTop = pre.scrollHeight
 }
@@ -216,21 +245,24 @@ function paintOutput(id) {
 // ---------- 数据 ----------
 
 async function pullOutput(id) {
-  const cur = state.outputs.get(id)
+  const stream = streamOf(id)
+  const key = `${id}:${stream}`
+  const cur = state.outputs.get(key)
   const res = await api('readOutput', {
     id,
+    stream,
     offset: cur && Number.isFinite(cur.offset) ? cur.offset : undefined,
     tailLines: 200,
   })
   const chunk = String(res.chunk || '')
   if (!cur || !Number.isFinite(cur.offset)) {
-    state.outputs.set(id, { offset: res.nextOffset, text: chunk })
+    state.outputs.set(key, { offset: res.nextOffset, text: chunk })
   } else if (chunk) {
     // 只保留最后 500 行：日志文件才是真相，界面不做无限回滚
     const merged = `${cur.text}${chunk}`.split('\n').slice(-500).join('\n')
-    state.outputs.set(id, { offset: res.nextOffset, text: merged })
+    state.outputs.set(key, { offset: res.nextOffset, text: merged })
   } else if (res.nextOffset !== cur.offset) {
-    state.outputs.set(id, { ...cur, offset: res.nextOffset })
+    state.outputs.set(key, { ...cur, offset: res.nextOffset })
   }
   paintOutput(id)
 }
@@ -297,9 +329,42 @@ document.addEventListener('click', async (event) => {
       } catch (error) {
         window.alert(String(error?.message || error))
       }
-      state.outputs.delete(id)
+      state.outputs.delete(`${id}:out`)
+      state.outputs.delete(`${id}:err`)
+      state.streams.delete(id)
       lastSignature = ''
       await tick()
+      return
+    }
+    if (action.dataset.act === 'rerun') {
+      try {
+        const res = await api('rerunTask', { id })
+        state.open = res.id
+        lastSignature = ''
+        await tick()
+        await pullOutput(res.id)
+      } catch (error) {
+        window.alert(String(error?.message || error))
+      }
+      return
+    }
+    if (action.dataset.act === 'clear') {
+      try {
+        await api('clearTasks', {})
+      } catch (error) {
+        window.alert(String(error?.message || error))
+      }
+      state.outputs.clear()
+      state.streams.clear()
+      lastSignature = ''
+      await tick()
+      return
+    }
+    if (action.dataset.act === 'stream') {
+      const stream = action.dataset.stream === 'err' ? 'err' : 'out'
+      state.streams.set(id, stream)
+      rebuild()
+      await pullOutput(id)
       return
     }
   }
@@ -314,7 +379,7 @@ document.addEventListener('click', async (event) => {
     return
   }
   state.open = id
-  if (!state.outputs.has(id)) state.outputs.set(id, { offset: undefined, text: '' })
+  if (!state.streams.has(id)) state.streams.set(id, 'out')
   rebuild()
   await pullOutput(id)
 })

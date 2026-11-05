@@ -142,3 +142,114 @@ describe('report transparency', () => {
     }
   }, 60_000)
 })
+
+describe('stdout/stderr split', () => {
+  it('keeps stderr out of the stdout log and readable on demand', async () => {
+    const res = await start({ command: 'echo 正常输出; echo 这是错误 >&2', label: '分流' })
+    const task = await waitDone(res.details.id)
+    expect(task.status).toBe('exited')
+
+    const out = await handle.invoke('tool.execute', { name: 'bg_output', args: { id: task.id }, sessionFile: 's1.jsonl' })
+    expect(out.details.chunk).toContain('正常输出')
+    // 分流的意义：正常输出里不该混进错误行
+    expect(out.details.chunk).not.toContain('这是错误')
+    expect(out.details.errBytes).toBeGreaterThan(0)
+
+    const err = await handle.invoke('tool.execute', {
+      name: 'bg_output',
+      args: { id: task.id, stream: 'err' },
+      sessionFile: 's1.jsonl',
+    })
+    expect(err.details.stream).toBe('err')
+    expect(err.details.chunk).toContain('这是错误')
+  }, 60_000)
+
+  it('routes the two streams to separate files', async () => {
+    const res = await start({ command: 'echo out-line; echo err-line >&2', label: '两个文件' })
+    const task = await waitDone(res.details.id)
+    const listed = await handle.invoke('listTasks', {})
+    const row = listed.tasks.find((t) => t.id === task.id)
+    expect(row.logPath).not.toBe(row.errPath)
+    expect(fs.readFileSync(row.logPath, 'utf8')).toContain('out-line')
+    expect(fs.readFileSync(row.errPath, 'utf8')).toContain('err-line')
+  }, 60_000)
+})
+
+describe('timeout guard', () => {
+  it('kills a task that outlives timeoutSeconds and says why', async () => {
+    // 5 秒是下限：传 1 秒会被抬到 5 秒，仍然按「防呆」的意图工作
+    const res = await start({ command: 'sleep 30', label: '会超时', timeoutSeconds: 1 })
+    expect(res.details.timeoutMs).toBe(5_000)
+    const task = await waitDone(res.details.id, 20_000)
+    expect(task.status).toBe('stopped')
+    expect(task.stopReason).toBe('timeout')
+    expect(task.exitCode).toBeNull()
+  }, 40_000)
+})
+
+describe('rerun and clear', () => {
+  it('reruns a finished task under a new id and keeps the old record', async () => {
+    const first = await start({ command: 'echo first-run' })
+    const done = await waitDone(first.details.id)
+    expect(done.status).toBe('exited')
+
+    const again = await handle.invoke('tool.execute', {
+      name: 'bg_rerun',
+      args: { id: first.details.id },
+      sessionFile: 's1.jsonl',
+      cwd: process.cwd(),
+    })
+    expect(again.details.id).not.toBe(first.details.id)
+    expect(again.details.rerunOf).toBe(first.details.id)
+    await waitDone(again.details.id)
+
+    const listed = await handle.invoke('listTasks', {})
+    // 老记录留着：它的结果和日志是独立事实，不该被新一次覆盖
+    expect(listed.tasks.some((t) => t.id === first.details.id)).toBe(true)
+  }, 60_000)
+
+  it('clears finished records but leaves running ones alone', async () => {
+    const running = await start({ command: 'sleep 20', label: '运行中' })
+    const finished = await start({ command: 'echo done' })
+    await waitDone(finished.details.id)
+
+    const cleared = await handle.invoke('tool.execute', { name: 'bg_clear', args: {}, sessionFile: 's1.jsonl' })
+    expect(cleared.details.cleared).toBeGreaterThanOrEqual(1)
+    expect(cleared.details.ids).toContain(finished.details.id)
+    expect(cleared.details.running).toBeGreaterThanOrEqual(1)
+
+    const listed = await handle.invoke('listTasks', {})
+    expect(listed.tasks.some((t) => t.id === running.details.id)).toBe(true)
+    expect(listed.tasks.some((t) => t.id === finished.details.id)).toBe(false)
+
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } })
+  }, 60_000)
+
+  it('stops the process before deleting a running task when keepRunning is false', async () => {
+    const running = await start({ command: 'sleep 30', label: '全清' })
+    const pid = running.details.pid
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { keepRunning: false },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.cleared).toBe(1)
+
+    const listed = await handle.invoke('listTasks', {})
+    expect(listed.tasks.length).toBe(0)
+
+    // 记录删了进程还在 = 孤儿进程。给 taskkill 一点时间，然后确认真的没了
+    const deadline = Date.now() + 5_000
+    let stillAlive = true
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      } catch {
+        stillAlive = false
+        break
+      }
+    }
+    expect(stillAlive).toBe(false)
+  }, 60_000)
+})

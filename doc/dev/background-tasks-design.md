@@ -391,9 +391,54 @@ type BgTask = {
 | 项 | 理由 |
 |---|---|
 | `bg_wait` | 与内置 bash 工具职责重叠，且鼓励最差用法 |
-| stdout/stderr 分流 | cmd 下没有 tee；bash 的进程替换能双写但顺序失真、对 Git Bash 版本敏感。等真有排查需求再做 |
+| stdout/stderr 分流 | **v0.2.0 已做**，见 §12.1：当初以为要 tee，其实两个文件就够，不需要双写 |
 | 返回纯对象 | 模型侧 content 只能是文本，`details` 透传已是能做到的极限 |
 
 ### 11.9 测试
 
 新增 `plugins/background-tasks/main.test.mjs`（6 条，真实子进程）：bash 循环能跑出三行、cmd 下 bash 语法被拒、`maxBytes: 64` 精确生效、`bg_stop` 等到终态且 `exitCode === null`、启动时回报预期、短任务跳过回报并记原因。vitest include 增加 `plugins/**/*.test.mjs`。
+
+## 12. 能力补齐（v0.2.0）
+
+这一轮的输入是对照 `pi-background-tasks`（ismailsaleekh，2.6.10）的能力盘点。结论是继续自研，但吸收三项成本低、收益明确的缺口；对方最宽的三块（delegate / Fusion / surviveReload）不抄，理由见 §12.5。
+
+### 12.1 stdout / stderr 分流（推翻 §11.8）
+
+§11.8 当初判断「cmd 下没有 tee，bash 进程替换顺序失真」——这是把问题想复杂了：不需要同时写一个文件再拆分，**直接让 shell 写两个文件**即可，重定向语法在 bash / cmd / powershell 三种 shell 下都成立：
+
+```
+(cmd) >> out.log 2>> err.log
+```
+
+- `logPath` 语义收窄为 stdout，新增 `errPath`；旧任务没有 `errPath`，`readLog` 按「无此流」返回空，不会报错。
+- `bg_output` 加 `stream: 'out' | 'err'`，UI 展开行给 stdout/stderr 两个 tab（只在 stderr 有内容或任务失败时出现）。
+- 回报文案里 stdout 与 stderr 分段；失败时 stderr 通常只有几十行，比在几万行正常输出里翻错误快得多。
+- 日志上限按两个文件之和计算，避免「分流之后上限形同翻倍」。
+
+### 12.2 超时兜底（`timeoutSeconds`）
+
+日志上限只能挡住「一直刷屏」的任务，挡不住一个安静空转的进程。`bg_start` 增加 `timeoutSeconds`：
+
+- 下限 5s（更短的任务本来就该用同步工具），上限 24h；超出范围不报错，夹到边界——传 1 秒的意图是「快点结束」，抬到 5 秒仍符合意图。
+- 到点走 `stopTask(task, true, 'timeout')`，状态是 `stopped` + `stopReason: 'timeout'`，`statusText` 单独出「已超时终止（上限 Ns）」。
+- **定时器不落盘**：它是「谁在盯着」而不是任务本身。`recover()` 按 `startedAt + timeoutMs` 重算剩余时间，已过期的立刻到点；插件卸载后不再兜底，任务继续跑（与「卸载不杀任务」的既有约定一致）。
+
+### 12.3 `bg_rerun` / `bg_clear`
+
+- `bg_rerun(id)`：用原 command / cwd / shell / 超时重跑，**总是生成新 id**，老记录的日志与结果保持不动（它是独立事实，被新一次覆盖会丢证据）。运行中的任务拒绝重跑，提示先停。
+- `bg_clear`：默认只清终态记录、保留运行中；`keepRunning: false` 才连运行中一起清。
+- 实现时踩到一个真 bug 并修掉：`keepRunning: false` 最初只删记录不停进程，会留下**孤儿进程**——记录没了、任务还在跑、也没人再回报它。现在先 `stopTask` 再 `waitForTerminal(3s)`，等进程真的退出才删日志文件，避免「删了文件它还在写」。单测钉住了这一条。
+
+### 12.4 测试
+
+`main.test.mjs` 从 6 条扩到 12 条，新增：stderr 不混进 stdout、两个流落到两个文件、超时终止且 `exitCode === null`、重跑生成新 id 且保留老记录、`bg_clear` 保留运行中、`keepRunning:false` 会停进程（孤儿进程回归）。
+
+### 12.5 明确不抄的三项
+
+| 项 | 理由 |
+|---|---|
+| `bg_delegate` | 只读子代理 = 子代理编排，与 `ctx.agents` / AgentTeam 职责重叠；塞进后台任务插件会让边界糊掉 |
+| Fusion（3 候选 + 盲评 + 合并） | 依赖 Anthropic / Codex 订阅 OAuth，且属于「多模型工作流」，不是后台任务该管的事 |
+| `surviveReload` | 对方只覆盖 same-process reload，救不了 worker 回收；要真跨进程存活得引入独立 supervisor，为低频场景付高成本 |
+
+顺带一个架构判断：对方的 EventBus 宿主接口（`pi-background-tasks:host:*:v1`）是「TUI 与前端不同进程」逼出来的补丁。我们的插件 main 与宿主同进程，本来就不需要序列化 / 租约 / 游标这一层——少一层就少一类 bug。
