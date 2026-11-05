@@ -39,6 +39,8 @@ describe('ComposerPluginBars', () => {
     state.pluginComposerBars = {}
     state.adapterWidgetExpandedBySession = {}
     state.toggleAdapterWidget.mockClear()
+    state.setActivePanel.mockClear()
+    state.revealRightPanel.mockClear()
   })
 
   it('renders nothing when no plugin has anything to say', () => {
@@ -70,6 +72,30 @@ describe('ComposerPluginBars', () => {
     expect(document.querySelector('[data-row-id="bg-1"]')).toHaveTextContent('构建桌面端')
     // 运行中的行给停止按钮，否则用户只能去右栏
     expect(screen.getByTitle('composer:pluginBar.stop')).toBeInTheDocument()
+  })
+
+  it('keeps the list open when a row opens its detail', () => {
+    // 点一行 → 右栏开详情，但托盘本身不该收起来：
+    // 收起后用户每次看完一条都得重新展开，是纯粹的重复劳动。
+    state.pluginComposerBars = {
+      'background-tasks': {
+        summary: '2 个任务在运行',
+        tone: 'running',
+        rows: [
+          { id: 'bg-1', label: '构建桌面端', status: 'running', startedAt: Date.now(), action: 'stop' },
+          { id: 'bg-2', label: '跑测试', status: 'running', startedAt: Date.now(), action: 'stop' },
+        ],
+        panelId: 'plugin:background-tasks:tasks',
+      },
+    }
+    state.adapterWidgetExpandedBySession['/s.jsonl\u0000plugin-bar\u0000background-tasks'] = true
+    state.rightPanelCatalog = [{ id: 'plugin:background-tasks:tasks' }]
+    render(<ComposerPluginBars />)
+
+    fireEvent.click(screen.getByTitle('构建桌面端'))
+    expect(state.toggleAdapterWidget).not.toHaveBeenCalled()
+    expect(state.setActivePanel).toHaveBeenCalledWith('plugin:background-tasks:tasks')
+    expect(state.revealRightPanel).toHaveBeenCalled()
   })
 
   it('shows a finished bar without a stale duration', () => {

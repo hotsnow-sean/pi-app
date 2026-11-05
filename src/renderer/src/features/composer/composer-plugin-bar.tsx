@@ -71,12 +71,10 @@ function BarRows({
   pluginId,
   bar,
   now,
-  onCollapse,
 }: {
   pluginId: string
   bar: PluginComposerBarState
   now: number
-  onCollapse: () => void
 }) {
   const { t } = useTranslation()
   if (bar.rows.length === 0) return null
@@ -98,7 +96,8 @@ function BarRows({
               onClick={() => {
                 if (bar.panelId) openPanel(bar.panelId)
                 notifyPlugin(pluginId, 'select', row.id)
-                onCollapse()
+                // 刻意不收起：托盘是「当前在跑的东西」的常驻入口，
+                // 点开详情只是换了个地方看，列表本身没有理由消失。
               }}
             >
               <RowIcon status={row.status} />
@@ -161,9 +160,7 @@ export function ComposerPluginBars() {
           >
             <div className="adapter-widget-expand" data-open={expanded ? 'true' : 'false'} aria-hidden={!expanded}>
               <div className="adapter-widget-expand-inner">
-                {expanded ? (
-                  <BarRows pluginId={pluginId} bar={bar} now={now} onCollapse={() => toggle(expansionKey)} />
-                ) : null}
+                {expanded ? <BarRows pluginId={pluginId} bar={bar} now={now} /> : null}
               </div>
             </div>
             <button

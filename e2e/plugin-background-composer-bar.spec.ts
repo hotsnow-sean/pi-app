@@ -51,6 +51,8 @@ test('composer tray shows this session tasks and opens the right panel on click'
 
     // 3. 点任务 → 右栏面板打开并定位到这一条
     await bar.locator('[data-row-id]').first().click()
+    // 展开态要留住：点一行只是「换到右栏看」，列表不该自己收起来
+    await expect(bar.locator('[data-row-id]')).toHaveCount(1)
     const panel = win.frameLocator('iframe[src$="ui/index.html"]')
     await expect(panel.locator('body')).toContainText('托盘演示', { timeout: 20_000 })
     await expect(panel.locator('.row.open')).toHaveCount(1, { timeout: 20_000 })
