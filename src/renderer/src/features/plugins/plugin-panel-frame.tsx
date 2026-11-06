@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipcClient } from '@renderer/lib/ipc-client'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { pluginEntryUrl } from '@shared/plugin-panel-url'
+import { PLUGIN_BRIDGE_PROTOCOL } from '@shared/plugin-bridge'
 
 /**
  * 会话条（content 模式）上报高度的上限。会话条是对话流的租客，超过这个高度的
@@ -31,17 +32,20 @@ export type PluginPanelFrameProps = {
 /**
  * 插件面板容器：pi-plugin:// iframe（sandbox，无 same-origin）。
  *
- * 握手协议（iframe ↔ 宿主 renderer，window.postMessage）：
- *   → { type: 'plugin-hello', panelId }                 iframe 就绪
+ * 桥由宿主下发（`pi-plugin://__host/bridge.js`，见 @shared/plugin-bridge），插件 UI 只写
+ * 业务、只用 `window.pi`。这里的握手协议就是桥的线上格式：
+ *   → { type: 'plugin-hello', bridge }                   桥就绪
  *   → { type: 'plugin-invoke', requestId, method, params }
  *   → { type: 'plugin-content-height', height }          content 模式下上报自身高度（0 = 收起）
  *   → { type: 'plugin-open-panel', panelId, requestId }  请求宿主切到某个右栏面板并展开
- *   ← { type: 'plugin-ready', panelId }                 宿主应答 hello
+ *   → { type: 'plugin-key', key, mod }                   转发键盘（Esc / mod+K）
+ *   ← { type: 'plugin-ready', panelId, protocol }        宿主应答 hello
  *   ← { type: 'plugin-invoke-result', requestId, ok, result?, error? }
  *   ← { type: 'plugin-open-panel-result', requestId, ok }
  *   ← { type: 'plugin-theme', vars: Record<string,string> }  主题 token（含自定义主题），切换/修改时重推
  *   ← { type: 'plugin-settings', values: Record<string,unknown> }  声明式设置项的值，握手时下发一次
  *   ← { type: 'plugin-context', context: { workspacePath, sessionFile, sessionId } }  当前工作区/会话
+ *   ← { type: 'plugin-dispose', reason }                 面板卸载：让桥 reject 掉挂起的调用
  *
  * 主题不进握手依赖：iframe load 后无条件补推一次，插件 UI 忘了发 hello 也不会停在自带兜底色上。
  * 上下文同理——会话条要靠它判断「这个会话有没有我的东西」，等 hello 才开始推会有丢消息的窗口。
@@ -116,6 +120,10 @@ export function PluginPanelFrame({
   defaultHeight = 44,
 }: PluginPanelFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  /** 记下 contentWindow：卸载时 ref 已经置空，靠它才能把 dispose 送达 */
+  const frameWindowRef = useRef<Window | null>(null)
+  /** ready 每个文档只发一次；换面板（src 变了）要重置，新文档得重新握手 */
+  const readySentRef = useRef(false)
   /** content 模式下插件上报的高度；null = 还没报，先用默认值占位 */
   const [contentHeight, setContentHeight] = useState<number | null>(null)
 
@@ -126,13 +134,23 @@ export function PluginPanelFrame({
   const contextRef = useRef({ workspacePath, sessionFile, sessionId })
   contextRef.current = { workspacePath, sessionFile, sessionId }
 
+  useEffect(() => {
+    readySentRef.current = false
+  }, [pluginId, panelId, entry])
+
   /**
-   * 推一次「面板需要知道的环境」：上下文 + 主题 + 设置。
+   * 推一次「面板需要知道的环境」：ready + 上下文 + 主题 + 设置。
    * 插件发 hello（正常路径）与 iframe load（兜底路径）都会调它。
    */
   const pushEnvironment = useCallback(() => {
     const win = iframeRef.current?.contentWindow
     if (!win) return
+    frameWindowRef.current = win
+    // ready 与 hello 谁先到都行（两条路径都调这里），桥侧幂等
+    if (!readySentRef.current) {
+      readySentRef.current = true
+      win.postMessage({ type: 'plugin-ready', panelId, protocol: PLUGIN_BRIDGE_PROTOCOL }, '*')
+    }
     win.postMessage({ type: 'plugin-context', context: contextRef.current }, '*')
     win.postMessage({ type: 'plugin-theme', vars: collectThemeVars() }, '*')
     // 设置值按需拉一次（目录里只有 schema）；失败不阻塞面板，插件用默认值即可
@@ -145,7 +163,7 @@ export function PluginPanelFrame({
         )
       })
       .catch(() => {})
-  }, [pluginId])
+  }, [pluginId, panelId])
 
   // 切会话/切工作区时主动重推：插件据此换「这是哪个会话」的上下文
   useEffect(() => {
@@ -159,7 +177,7 @@ export function PluginPanelFrame({
       const data = event.data as Record<string, unknown>
       if (!data || typeof data !== 'object') return
       if (data.type === 'plugin-hello') {
-        frame.contentWindow?.postMessage({ type: 'plugin-ready', panelId }, '*')
+        // 桥脚本在 iframe 里同步执行时就发了 hello，比 load 更早；ready 由 pushEnvironment 统一发
         pushEnvironment()
         return
       }
@@ -223,6 +241,19 @@ export function PluginPanelFrame({
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
   }, [handleMessage])
+
+  // 面板卸载时把挂起的调用 reject 掉。不做这一步，插件侧那些 api() 会一直等到
+  // 各自的超时（没有超时的实现就是永远转圈）——桥的 promise 没有别的出口。
+  useEffect(() => {
+    return () => {
+      try {
+        frameWindowRef.current?.postMessage({ type: 'plugin-dispose', reason: 'unmount' }, '*')
+      } catch {
+        // iframe 已经拆掉，消息无处可送；挂起的调用随文档一起消失
+      }
+      frameWindowRef.current = null
+    }
+  }, [])
 
   // 主题跟随：明暗切换（documentElement class）、自定义主题/背景层（head 内 <style> 变化、根 style）
   // 都会落到上述节点，统一观察后重推 token。防抖合并连续变更。

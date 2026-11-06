@@ -10,7 +10,7 @@ plugins/<id>/
   plugin.json      manifest（id/name/version/main + views[] + panels[] + sessionBars[] + tools[] + settings[]）
   main.mjs         main 侧：export async function activate(ctx) → { invoke(method, params) }
   lib/*.mjs        （可选）main 侧拆分模块，由 main.mjs 动态加载
-  ui/index.html    （可选）中央视图 / 右栏面板，iframe 沙箱 + postMessage
+  ui/index.html    （可选）中央视图 / 右栏面板，iframe 沙箱 + 宿主下发的 window.pi
   ui/session-bar.html （可选）对话区顶部的会话条
 ```
 
@@ -191,20 +191,48 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 | `panels[]` | 右栏（窄，约 288px） | 旁注性质的列表/详情，可与对话并排看 |
 | `sessionBars[]` | 对话区顶部 | 跟着**当前会话**走的一条窄带，回答「这个会话后台在干什么」 |
 
-- iframe 用 `pi-plugin://<id>/<entry>` 加载，通过 `postMessage` 通信。
-- 宿主 → 插件：`plugin-theme`（CSS 变量）、`plugin-settings`（声明式设置值）、
-  `plugin-context`（`{ workspacePath, sessionFile, sessionId }`，切会话/切工作区时重推）、
-  `plugin-invoke-result`、`plugin-open-panel-result`。
-- 插件 → 宿主：
-  - `plugin-invoke`（`method` 必须是 main 侧 `invoke` 能处理的键）
-  - `plugin-key`（把 Esc / Cmd-K 转给宿主，否则 iframe 有焦点时快捷键失效）
-  - `plugin-content-height`（**仅 sessionBars**）：上报自身高度，`0` = 收起。
-    宿主按这个值撑容器；报 0 时 iframe 不卸载，随时能再撑开。
-    **上限 400px**（`plugin-panel-frame.tsx` 的 `MAX_CONTENT_HEIGHT`）：会话条是
-    对话流的租客，超过这个高度的内容应该做进右栏面板，宿主会截断而不是把对话流顶开。
-  - `plugin-open-panel`：`{ panelId, requestId }` 请求宿主切到某个右栏面板并展开。
-    宿主只在面板真实存在于目录时动手，回 `plugin-open-panel-result { ok }`。
-- 同一份 HTML 可以在中央视图与右栏两处渲染，按自身宽度自适应（用 `@media (max-width:460px)` 之类做窄栏分支）。
+- iframe 用 `pi-plugin://<id>/<entry>` 加载，入口 HTML 里引一行**宿主下发的桥**，
+  之后只用 `window.pi`：
+
+  ```html
+  <script src="pi-plugin://__host/bridge.js"></script>
+  <script src="app.js"></script>
+  ```
+
+  **不要自己写 postMessage 客户端**。`postMessage` 是单向广播，没有返回值、没有
+  「这条回包对应哪次请求」的概念；请求配对、超时、面板卸载时的清理都得自己造，每个插件
+  各写一份必然分叉（宿主侧这份已经因为分叉出三种行为而收回）。桥现在只有一份实现，
+  插件只管业务。
+
+**`window.pi`（插件 UI 唯一需要知道的接口）**
+
+| 成员 | 说明 |
+|---|---|
+| `pi.invoke(method, params?, { timeoutMs? })` | 调 main 侧 `methods[method]`，返回 Promise。默认 **10s 超时**，超时 reject 且 `error.code === 'timeout'`；`timeoutMs: 0` 关闭（慎用） |
+| `pi.on('theme'\|'settings'\|'context'\|'dispose', fn)` | 订阅宿主推送，返回取消函数 |
+| `pi.settings` / `pi.context` / `pi.theme` / `pi.panelId` | 最近一次的值（只读快照，每次推送换引用） |
+| `pi.openPanel(panelId)` | 请求宿主切到某个右栏面板并展开，resolve 成 `boolean` |
+| `pi.setContentHeight(h)` | **仅 sessionBars**：上报自身高度，`0` = 收起，上限 400px |
+| `pi.forwardKey(key, { mod })` | 把 Esc / Cmd-K 转给宿主（iframe 有焦点时宿主收不到 keydown） |
+| `pi.dispose()` | 主动关闭通道（一般不用；面板卸载由宿主触发） |
+
+- 握手由桥自动完成，插件不需要发 hello；主题也由桥落到 `documentElement`，
+  插件只需在 `style.css` 里给 `--pi-*` 写兜底值。
+- 超时、销毁、跨会话重推这些行为都由桥保证：面板卸载时宿主发 `plugin-dispose`，
+  桥会把挂起的调用全部 reject（`error.code === 'disposed'`），不会留下永远转圈的按钮。
+- 插件没引桥（HTML 漏了那行 script）时，`window.pi` 不存在：请按
+  `const bridge = window.pi || { ...降级对象 }` 兜底，让面板显示「桥未加载」
+  而不是白屏。
+
+**线上协议**（宿主 ↔ 桥，插件作者不用碰，改这里要同步 `plugin-panel-frame.tsx` 的注释）：
+
+- 宿主 → 插件：`plugin-ready`（`{ panelId, protocol }`）、`plugin-theme`（CSS 变量）、
+  `plugin-settings`（声明式设置值）、`plugin-context`（`{ workspacePath, sessionFile, sessionId }`，
+  切会话/切工作区时重推）、`plugin-invoke-result`、`plugin-open-panel-result`、`plugin-dispose`。
+- 插件 → 宿主：`plugin-hello`、`plugin-invoke`、`plugin-open-panel`、`plugin-key`、
+  `plugin-content-height`。
+- 协议版本是 `packages/shared/plugin-bridge.ts` 的 `PLUGIN_BRIDGE_PROTOCOL`，与桥脚本里
+  那一份必须一致（有测试守着）；不一致时桥只 warn，不中断。
 
 **会话条的两条约定**：
 1. 归属判断由插件自己做——宿主不做反查，也不预判空态。插件报 0 就等于「这里没我事」。

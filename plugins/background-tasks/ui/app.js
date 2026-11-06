@@ -1,57 +1,29 @@
 /* 后台任务插件 UI：列表 / 展开看命令与输出 / 停止 / 重新回报。
-   数据通过 invoke 桥拉取，1.5 秒轮询一次（只在页面可见时）。 */
+   数据通过 window.pi.invoke 拉取，1.5 秒轮询一次（只在页面可见时）。 */
 
-// ---------- invoke 桥 ----------
+// ---------- 与宿主的通道 ----------
+// 桥由宿主下发（pi-plugin://__host/bridge.js）：握手、主题落地、invoke 超时、销毁都在
+// 那边。缺桥时降级成失败而不是白屏——空面板比一句「桥未加载」难查得多。
 
-let invokeSeq = 0
-const waiters = new Map()
-let pluginSettings = {}
+const bridge = window.pi || {
+  invoke: () => Promise.reject(new Error('插件桥未加载，面板无法读取数据')),
+  forwardKey: () => {},
+  on: () => () => {},
+  settings: {},
+  context: {},
+}
 
-window.addEventListener('message', (event) => {
-  const data = event.data
-  if (!data || typeof data !== 'object') return
-  if (data.type === 'plugin-theme') {
-    applyTheme(data.vars)
-    return
-  }
-  if (data.type === 'plugin-context') {
-    // 面板严格跟当前会话走（宿主在会话切换时会重推 context）
-    const sf = data.context && typeof data.context === 'object' ? String(data.context.sessionFile || '') : ''
-    if (sf !== state.sessionFile) {
-      state.sessionFile = sf
-      state.open = null
-      lastSignature = null
-      rebuild()
-    }
-    return
-  }
-  if (data.type === 'plugin-settings') {
-    pluginSettings = data.values && typeof data.values === 'object' ? data.values : {}
-    return
-  }
-  if (data.type === 'plugin-invoke-result') {
-    const waiter = waiters.get(data.requestId)
-    if (!waiter) return
-    waiters.delete(data.requestId)
-    if (data.ok) waiter.resolve(data.result)
-    else waiter.reject(new Error(data.error || 'invoke failed'))
-  }
+const api = (method, params) => bridge.invoke(method, params)
+
+// 面板严格跟当前会话走（宿主在会话切换时会重推 context）
+bridge.on('context', (context) => {
+  const sf = context && typeof context === 'object' ? String(context.sessionFile || '') : ''
+  if (sf === state.sessionFile) return
+  state.sessionFile = sf
+  state.open = null
+  lastSignature = null
+  rebuild()
 })
-
-/** 主题：vars 是 `--pi-*` → 完整 CSS 值的映射，落到 documentElement 行内样式 */
-function applyTheme(vars) {
-  if (!vars || typeof vars !== 'object') return
-  const root = document.documentElement
-  for (const [name, value] of Object.entries(vars)) {
-    if (typeof value === 'string' && value) root.style.setProperty(name, value)
-  }
-}
-
-function api(method, params) {
-  const requestId = ++invokeSeq
-  window.parent.postMessage({ type: 'plugin-invoke', requestId, method, params }, '*')
-  return new Promise((resolve, reject) => waiters.set(requestId, { resolve, reject }))
-}
 
 /** iframe 里的 keydown 上不了宿主：Esc / Cmd-K 主动转发（契约见 plugin-panel-frame） */
 window.addEventListener('keydown', (event) => {
@@ -61,12 +33,12 @@ window.addEventListener('keydown', (event) => {
       rebuild()
       return
     }
-    window.parent.postMessage({ type: 'plugin-key', key: 'Escape' }, '*')
+    bridge.forwardKey('Escape')
     return
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault()
-    window.parent.postMessage({ type: 'plugin-key', key: 'k', mod: true }, '*')
+    bridge.forwardKey('k', { mod: true })
   }
 })
 

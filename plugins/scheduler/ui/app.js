@@ -8,59 +8,21 @@
  * 不依赖轮询。
  */
 
-// ---------- invoke 桥 ----------
+// ---------- 与宿主的通道 ----------
+// 桥由宿主下发（pi-plugin://__host/bridge.js）：握手、主题落地、invoke 超时、销毁都在
+// 那边，这里不再自己维护 requestId / waiters。缺桥时降级成失败而不是白屏——空面板
+// 比一句「桥未加载」难查得多。
 
-let invokeSeq = 0
-const waiters = new Map()
-
-/** 声明式设置项的当前值（宿主握手时下发一次，见 plugin-panel-frame 的 plugin-settings） */
-let pluginSettings = {}
-
-window.addEventListener('message', (event) => {
-  const data = event.data
-  if (!data || typeof data !== 'object') return
-  if (data.type === 'plugin-theme') {
-    applyTheme(data.vars)
-    return
-  }
-  if (data.type === 'plugin-settings') {
-    pluginSettings = data.values && typeof data.values === 'object' ? data.values : {}
-    return
-  }
-  if (data.type === 'plugin-invoke-result') {
-    const waiter = waiters.get(data.requestId)
-    if (!waiter) return
-    waiters.delete(data.requestId)
-    clearTimeout(waiter.timer)
-    if (data.ok) waiter.resolve(data.result)
-    else waiter.reject(new Error(data.error || 'invoke failed'))
-  }
-})
-
-/**
- * 应用宿主主题：vars 是 `--pi-*` → 完整 CSS 值的映射（见宿主 plugin-panel-frame 主题契约）。
- * 落到 documentElement 行内样式，优先级高于 style.css 的 :root 兜底值。
- */
-function applyTheme(vars) {
-  if (!vars || typeof vars !== 'object') return
-  const root = document.documentElement
-  for (const [name, value] of Object.entries(vars)) {
-    if (typeof value === 'string' && value) root.style.setProperty(name, value)
-  }
+const bridge = window.pi || {
+  invoke: () => Promise.reject(new Error('插件桥未加载，面板无法读取数据')),
+  forwardKey: () => {},
+  on: () => () => {},
+  settings: {},
+  context: {},
 }
 
-/** 面板失联时不能让按钮永远转圈：10s 没回包就报错，用户还能重试 */
-function api(method, params) {
-  const requestId = ++invokeSeq
-  window.parent.postMessage({ type: 'plugin-invoke', requestId, method, params }, '*')
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      waiters.delete(requestId)
-      reject(new Error('宿主没有响应，请稍后重试'))
-    }, 10_000)
-    waiters.set(requestId, { resolve, reject, timer })
-  })
-}
+/** 业务侧对桥的短名字：数据都从插件 main 侧的 methods 来 */
+const api = (method, params) => bridge.invoke(method, params)
 
 /**
  * 转发宿主全局快捷键：iframe 有焦点时宿主 window 收不到 keydown（子文档独立），
@@ -87,12 +49,12 @@ window.addEventListener('keydown', (e) => {
       render()
       return
     }
-    window.parent.postMessage({ type: 'plugin-key', key: 'Escape' }, '*')
+    bridge.forwardKey('Escape')
     return
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault()
-    window.parent.postMessage({ type: 'plugin-key', key: 'k', mod: true }, '*')
+    bridge.forwardKey('k', { mod: true })
   }
 })
 
@@ -1171,11 +1133,10 @@ function schedulePoll() {
 // ---------- 启动 ----------
 
 async function boot() {
-  window.parent.postMessage({ type: 'plugin-hello', panelId: 'scheduler:main' }, '*')
   try {
     await refresh()
   } catch (error) {
-    // 宿主还没准备好（或握手失败）也要把骨架画出来：空白页比空态更难判断
+    // 宿主还没准备好（或桥没加载）也要把骨架画出来：空白页比空态更难判断
     console.error('scheduler: initial refresh failed', error)
   }
   render()
