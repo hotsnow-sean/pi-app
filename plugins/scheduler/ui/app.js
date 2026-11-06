@@ -495,7 +495,7 @@ function detailHtml() {
     </div>
     <div class="detail-meta">
       <span>通知策略：${esc(task.notifyPolicyLabel)}</span>
-      <span>累计执行 ${task.runCount} 次</span>
+      <span>累计完成 ${task.runCount} 次</span>
       ${last ? `<span>上次 ${esc(statusOf(last))} · ${esc(fmtWhen(last.finishedAt ?? last.queuedAt))}</span>` : '<span>还没有运行过</span>'}
       ${task.cwd ? `<span class="mono">${esc(task.cwd)}</span>` : ''}
     </div>
@@ -1060,8 +1060,8 @@ async function runNow(task) {
 }
 
 async function deleteTask(task) {
-  const runs = task.runCount || 0
-  if (!window.confirm(`删除任务「${task.name}」？\n它的 ${runs} 条运行记录也会一并删除，且不可撤销。`)) return
+  // runCount 只数「跑完的」，拿它当记录条数会少报（跳过的、进行中的都不在内）
+  if (!window.confirm(`删除任务「${task.name}」？\n它的全部运行记录也会一并删除，且不可撤销。`)) return
   try {
     await api('deleteTask', { id: task.id })
   } catch (error) {

@@ -18,7 +18,7 @@
     {
       "name": "sched_create",
       "label": "创建定时任务",
-      "description": "Create a scheduled task that runs a prompt automatically at a future time, and keeps running across restarts until the user disables or deletes it. Use it whenever the user says things like 'every day at 8:30 summarize my day', 'every Monday write a weekly report', 'remind me tomorrow at 3pm'. One-off reminders also use this tool with kind:'once' — do not use any other mechanism for time-based reminders. IMPORTANT: each run happens in a brand-new headless session that cannot see this conversation and cannot call plugin tools (only built-in bash/read/write/find/grep/ls), so the prompt must be fully self-contained: say what to do, where, and what output format you want. Never write 'same as before' or refer to earlier context. Call sched_list first if you suspect a similar task already exists; creating a duplicate is rejected.",
+      "description": "Create a scheduled task that runs a prompt automatically at a future time, and keeps running across restarts until the user disables or deletes it. Use it whenever the user says things like 'every day at 8:30 summarize my day', 'every Monday write a weekly report', 'remind me tomorrow at 3pm'. One-off reminders also use this tool with kind:'once' — do not use any other mechanism for time-based reminders. IMPORTANT: each run happens in a brand-new headless session that cannot see this conversation and cannot call plugin tools (only built-in bash/read/write/find/grep/ls), so the prompt must be fully self-contained: say what to do, where, and what output format you want. Never write 'same as before' or refer to earlier context. Task names are unique: creating a second task with an existing name is rejected — call sched_list first, then use sched_update for a task that already exists, or pick a distinct name (e.g. '早间简报' vs '晚间简报').",
       "parameters": {
         "type": "object",
         "properties": {
@@ -194,7 +194,7 @@
     {
       "name": "sched_run_now",
       "label": "立即运行定时任务",
-      "description": "Run a scheduled task once, right now, without changing its regular schedule. Use it when the user says 'run it now' or wants to test a task they just created. The run is queued and executed serially, so it may wait for other runs. Unless waitMs is given the reply only confirms the run was queued; pass waitMs (e.g. 20000) when the user expects the result in this turn. If the task is already running, nothing is queued twice — the reply says so.",
+      "description": "Run a scheduled task once, right now, without changing or cancelling its regular schedule — for a once task the original time still fires, and for repeating tasks the next run is unchanged. Use it when the user says 'run it now' or wants to test a task they just created. The run is queued and executed serially, so it may wait for other runs. Unless waitMs is given the reply only confirms the run was queued; pass waitMs (e.g. 20000) when the user expects the result in this turn. If the task is already running, nothing is queued twice — the reply says so.",
       "parameters": {
         "type": "object",
         "properties": {
