@@ -14,6 +14,17 @@ window.addEventListener('message', (event) => {
     applyTheme(data.vars)
     return
   }
+  if (data.type === 'plugin-context') {
+    // 面板严格跟当前会话走（宿主在会话切换时会重推 context）
+    const sf = data.context && typeof data.context === 'object' ? String(data.context.sessionFile || '') : ''
+    if (sf !== state.sessionFile) {
+      state.sessionFile = sf
+      state.open = null
+      lastSignature = ''
+      rebuild()
+    }
+    return
+  }
   if (data.type === 'plugin-settings') {
     pluginSettings = data.values && typeof data.values === 'object' ? data.values : {}
     return
@@ -63,6 +74,8 @@ window.addEventListener('keydown', (event) => {
 
 const state = {
   tasks: [],
+  /** 当前会话（宿主经 plugin-context 推送）：面板严格只显示这个会话的任务 */
+  sessionFile: '',
   open: null,
   /** `${id}:${stream}` → { offset, text }：每个流独立的增量读游标 */
   outputs: new Map(),
@@ -139,6 +152,28 @@ function esc(text) {
     .replace(/"/g, '&quot;')
 }
 
+// ---------- 会话过滤（与 main.mjs 的 normSession/sameSession 同一套规则） ----------
+
+function normSession(p) {
+  const s = String(p || '').trim()
+  if (!s) return ''
+  return s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function sameSession(a, b) {
+  const x = normSession(a)
+  const y = normSession(b)
+  if (!x || !y) return false
+  if (x === y) return true
+  // 退一步比 basename：会话文件名自带唯一 id，撞名几乎不可能
+  return x.split('/').pop() === y.split('/').pop()
+}
+
+/** 面板只看当前会话 */
+function visibleTasks() {
+  return state.tasks.filter((t) => sameSession(t.sessionFile, state.sessionFile))
+}
+
 // ---------- 渲染 ----------
 
 const ICON_STOP =
@@ -195,36 +230,40 @@ function rowHtml(task) {
 }
 
 function rebuild() {
-  const counts = state.tasks.filter((t) => t.status === 'running').length
-  const finished = state.tasks.length - counts
+  const tasks = visibleTasks()
+  const counts = tasks.filter((t) => t.status === 'running').length
+  const finished = tasks.length - counts
   const head = `
   <div class="head">
     <h1>后台任务</h1>
-    <span class="count" data-field="count">${counts ? `${counts} 个运行中` : `${state.tasks.length} 条记录`}</span>
+    <span class="count" data-field="count">${counts ? `${counts} 个运行中` : `${tasks.length} 条记录`}</span>
     <span class="spacer"></span>
     ${finished ? '<button class="ghost-btn" data-act="clear">清空已结束</button>' : ''}
     <span class="policy" data-field="policy">完成后：${esc(POLICY_TEXT[state.policy] || state.policy)}</span>
   </div>`
-  if (!state.tasks.length) {
+  if (!tasks.length) {
     const err = lastError
       ? `<div class="empty" style="border-color:var(--err);color:var(--err)"><strong>读不到任务列表</strong>${esc(lastError)}</div>`
-      : '<div class="empty"><strong>还没有后台任务</strong>让 agent 跑个长命令，它会出现在这里；跑完还能自己把结果说完。</div>'
+      : state.tasks.length
+        ? `<div class="empty"><strong>当前会话没有后台任务</strong>其它会话还有 ${state.tasks.length} 条记录；这里的列表只跟着本会话走。</div>`
+        : `<div class="empty"><strong>还没有后台任务</strong>让 agent 跑个长命令，它会出现在这里；跑完还能自己把结果说完。</div>`
     root.innerHTML = `${head}${err}`
     lastSignature = ''
     return
   }
-  root.innerHTML = `${head}<div class="list">${state.tasks.map(rowHtml).join('')}</div>`
+  root.innerHTML = `${head}<div class="list">${tasks.map(rowHtml).join('')}</div>`
   if (state.open) paintOutput(state.open)
 }
 
 /** 只更新文本类字段，避免整表重建导致展开态/滚动跳动 */
 function updateMeta() {
-  const running = state.tasks.filter((t) => t.status === 'running').length
+  const tasks = visibleTasks()
+  const running = tasks.filter((t) => t.status === 'running').length
   const countEl = root.querySelector('[data-field="count"]')
-  if (countEl) countEl.textContent = running ? `${running} 个运行中` : `${state.tasks.length} 条记录`
+  if (countEl) countEl.textContent = running ? `${running} 个运行中` : `${tasks.length} 条记录`
   const policyEl = root.querySelector('[data-field="policy"]')
   if (policyEl) policyEl.textContent = `完成后：${POLICY_TEXT[state.policy] || state.policy}`
-  for (const task of state.tasks) {
+  for (const task of tasks) {
     const row = root.querySelector(`.row[data-id="${task.id}"]`)
     if (!row) continue
     const meta = row.querySelector('[data-field="meta"]')
@@ -287,17 +326,18 @@ async function tick() {
     const focusHit = !!(focus && focus.id && Number(focus.seq) !== state.focusSeq)
     if (focusHit) {
       state.focusSeq = Number(focus.seq)
-      if (state.tasks.some((t) => t.id === focus.id)) {
+      if (visibleTasks().some((t) => t.id === focus.id)) {
         state.open = focus.id
         if (!state.streams.has(focus.id)) state.streams.set(focus.id, 'out')
         lastSignature = ''
         state.pendingScroll = focus.id
       }
     }
-    const signature = state.tasks.map((t) => `${t.id}:${t.status}:${t.report}`).join(',')
+    const visible = visibleTasks()
+    const signature = visible.map((t) => `${t.id}:${t.status}:${t.report}`).join(',')
     if (signature !== lastSignature) {
       lastSignature = signature
-      if (state.open && !state.tasks.some((t) => t.id === state.open)) state.open = null
+      if (state.open && !visible.some((t) => t.id === state.open)) state.open = null
       rebuild()
     } else {
       updateMeta()
@@ -371,8 +411,12 @@ document.addEventListener('click', async (event) => {
       return
     }
     if (action.dataset.act === 'clear') {
+      // 面板是会话作用域的：只清当前会话已结束的，别把别的会话的记录一起带走
+      const ids = visibleTasks()
+        .filter((t) => t.status !== 'running')
+        .map((t) => t.id)
       try {
-        await api('clearTasks', {})
+        if (ids.length) await api('clearTasks', { ids })
       } catch (error) {
         window.alert(String(error?.message || error))
       }

@@ -1116,14 +1116,18 @@ const tools = {
     // 实情是 keepRunning=true 把它们跳过了。文案必须说实话。
     const runningSkipped = res.skippedRunning || 0
     if (!res.cleared) {
+      if (runningSkipped > 0 || res.missing?.length) {
+        // 两种「没清掉」的原因必须分开说：一个是任务还活着，一个是 id 写错了
+        const parts = []
+        if (runningSkipped > 0)
+          parts.push(`${runningSkipped} 个运行中任务已跳过（keepRunning=true，要连任务一起停止并删除请传 keepRunning:false）`)
+        if (res.missing?.length) parts.push(`id 不存在：${res.missing.join(', ')}`)
+        return { text: `没有清理任何记录：${parts.join('；')}。`, details: res }
+      }
       return {
-        text: res.missing?.length
-          ? `没有匹配的任务可清理（id 不存在：${res.missing.join(', ')}）。`
-          : runningSkipped > 0 && wanted.includes('running')
-            ? `${runningSkipped} 个运行中任务已跳过（keepRunning 默认 true，清理只动已结束的记录）。要连任务一起停止并删除请传 keepRunning:false。`
-            : wanted.length
-              ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
-              : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
+        text: wanted.length
+          ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
+          : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
         details: res,
       }
     }
@@ -1279,6 +1283,8 @@ const methods = {
         command: t.command,
         cwd: t.cwd,
         shell: t.shell,
+        // 面板按当前会话过滤要用它；此前面板跨会话展示所以一直没投影这个字段
+        sessionFile: t.sessionFile ?? null,
         status: t.status,
         exitCode: t.exitCode,
         stopReason: t.stopReason ?? null,
@@ -1409,7 +1415,11 @@ const methods = {
     save()
     for (const task of victims) removeTaskFiles(task)
     for (const task of victims) pushBarForTask(task)
-    const missing = wantedIds.filter((id) => !clearedIds.includes(id))
+    // missing 只算真正不存在的 id：运行中被 keepRunning 挡下的任务存在且活着，
+    // 把它报成「id 不存在」会让人以为记错了 id（v6 实测踩过）
+    const missing = wantedIds.filter(
+      (id) => !clearedIds.includes(id) && !state.tasks.some((t) => t.id === id),
+    )
     const remaining = state.tasks.filter((t) => t.status === 'running').length
     return {
       ok: true,
@@ -1469,6 +1479,12 @@ export async function activate(pluginContext) {
 
   load()
   recover()
+
+  // 重启后补推托盘：托盘只在任务事件时推送，重启后没有任何事件，
+  // 结果就是面板里有列表、对话框上方却毫无痕迹。面板能看到的，托盘也得能看到。
+  for (const sf of new Set(state.tasks.map((t) => t.sessionFile).filter(Boolean))) {
+    pushComposerBar(sf)
+  }
 
   // 会话忙闲：只为面板提示留痕，不参与「要不要回报」（投递走 deliverAs:steer，
   // 忙闲由宿主 worker 侧消化）
