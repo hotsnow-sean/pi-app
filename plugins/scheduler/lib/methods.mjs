@@ -46,6 +46,16 @@ function randomSuffix() {
 }
 
 /**
+ * 名称比较：去空白 + 不区分大小写（「Daily Brief」和「daily brief」在列表里
+ * 看起来就是一个东西）。中文名不受影响。
+ * @param {any} a
+ * @param {any} b
+ */
+function sameName(a, b) {
+  return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
+}
+
+/**
  * 公开出去的任务形状。工具层也要用（工具回执要复述下次执行时间），
  * 所以不藏在闭包里。
  * @param {any} task
@@ -168,9 +178,23 @@ const methods = {
     const { task: normalized, errors, pastOnce } = normalizeTaskInput(merged, { mode: 'ui', now })
     if (errors.length > 0) throw new Error(errors.join('；'))
 
+    // 名称是用户唯一能用来指认任务的字段（id 是 `task-1793966830721-bmgsgr` 这种），
+    // 重名之后列表里根本没法分辨谁是谁。规则放在这里——UI 与工具只有这一条写路径，
+    // 各写一份必然漂移（v0.2.0 就是工具判重、UI 不判，描述和实现还对不上）。
+    const clash = rt.state.tasks.find(
+      (item) => item.id !== existing?.id && sameName(item.name, normalized.name),
+    )
+    if (clash) {
+      throw new Error(
+        `已存在同名任务「${clash.name}」（${clash.id}，${scheduleLabel(clash)}）：请换个名字，或直接改那个任务。`,
+      )
+    }
+
     let saved = existing
     if (!saved) {
-      if (rt.state.tasks.length >= MAX_TASKS) throw new Error(`任务数已达上限 ${MAX_TASKS} 个`)
+      if (rt.state.tasks.length >= MAX_TASKS) {
+        throw new Error(`任务数已达上限 ${MAX_TASKS} 个，请先删除不用的任务`)
+      }
       saved = {
         id: `task-${now}-${randomSuffix()}`,
         createdAt: now,

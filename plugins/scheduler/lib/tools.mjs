@@ -18,10 +18,9 @@ import path from 'node:path'
 const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : ''
 const imp = (name) => import(pathToFileURL(path.join(import.meta.dirname, `${name}.mjs`)).href + Q)
 
-const { rt, MAX_TASKS } = await imp('runtime')
+const { rt } = await imp('runtime')
 const { normalizeTaskInput } = await imp('task-input')
 const { methods, publicTask } = await imp('methods')
-const { scheduleLabel } = await imp('schedule')
 const { runsSorted, publicRun } = await imp('runs')
 const { describeNext, fmtWhen, fmtDuration, statusText, skipText, triggerText, oneLine } = await imp('format')
 
@@ -74,20 +73,33 @@ function pickPatch(args) {
   return patch
 }
 
-/** 任务列表的一行：id 给短形式，完整 id 在 details 里 */
-function taskLine(task, index, now) {
+/**
+ * 任务列表的一行。
+ *
+ * ⚠️ 入参**必须**是 `publicTask()` 的产物：`scheduleLabel` / `notifyPolicyLabel`
+ * 都是投影里才算出来的派生字段，原始任务对象上没有——直接传 `rt.state.tasks` 里的
+ * 元素会渲染出 `undefined`（v0.2.0 的列表就这么坏过一版）。
+ */
+function taskLine(view, index, now) {
   const next =
-    task.enabled && task.nextRunAt
-      ? `下次 ${fmtWhen(task.nextRunAt, now)}`
-      : task.done
+    view.enabled && view.nextRunAt
+      ? `下次 ${fmtWhen(view.nextRunAt, now)}`
+      : view.done
         ? '已完成'
         : '已停用'
   const last = (() => {
-    const run = runsSorted().find((item) => item.taskId === task.id)
+    const run = runsSorted().find((item) => item.taskId === view.id)
     if (!run) return '还没跑过'
     return `上次 ${fmtWhen(run.finishedAt ?? run.queuedAt, now)} ${statusText(run.status)}`
   })()
-  return `${index}. ${task.name}（${task.id}）· ${task.scheduleLabel} · ${next} · ${last}`
+  return `${index}. ${view.name}（${view.id}）· ${view.scheduleLabel} · ${next} · ${last}`
+}
+
+/** 进行中的记录数：runCount 只在收尾时累加，光看它会以为「没跑过」 */
+function activeCountOf(taskId) {
+  return runsSorted().filter(
+    (run) => run.taskId === taskId && (run.status === 'queued' || run.status === 'running'),
+  ).length
 }
 
 const tools = {
@@ -99,21 +111,16 @@ const tools = {
     if (!input.cwd && meta?.cwd) input.cwd = String(meta.cwd)
     const { task, errors } = normalizeTaskInput(input, { mode: 'tool' })
     if (errors.length > 0) return fail(`未创建：${errors.join('；')}`)
-    if (rt.state.tasks.length >= MAX_TASKS) {
-      return fail(`未创建：定时任务已达上限 ${MAX_TASKS} 个。可以先删掉不用的任务（sched_list 查看）。`)
-    }
-    const duplicate = rt.state.tasks.find(
-      (item) => item.name === task.name && String(item.prompt) === String(task.prompt),
-    )
-    if (duplicate) {
-      return fail(
-        `未创建：已存在同名同提示词的任务「${duplicate.name}」（${duplicate.id}，${scheduleLabel(duplicate)}）。` +
-          '如果是想改时间，用 sched_update；确实要再建一个，请换个名字。',
-      )
-    }
     task.cwd = task.cwd || rt.settings.defaultCwd || ''
     task.createdBy = 'agent'
-    const { task: saved } = await methods.saveTask({ task })
+    // 上限与重名都归 methods.saveTask 管：UI 与工具只有这一条写路径，
+    // 规则放两处必然漂移（v0.2.0 里工具判重、UI 不判，描述说的和做的不一致）
+    let saved
+    try {
+      ;({ task: saved } = await methods.saveTask({ task }))
+    } catch (error) {
+      return fail(`未创建：${oneLine(error?.message ?? error, 300)}`)
+    }
     const next = saved.nextRunAt ? describeNext(saved.nextRunAt) : '不会执行（已停用或已过期）'
     return {
       text: [
@@ -140,21 +147,24 @@ const tools = {
     if (id) {
       const task = taskById(id)
       if (!task) return fail(`没有 id 为 ${id} 的任务。先用 sched_list 查一遍 id（id 不会变）。`)
+      const view = publicTask(task)
       const run = runsSorted().find((item) => item.taskId === task.id)
+      const active = activeCountOf(task.id)
       const lines = [
-        `「${task.name}」· ${task.scheduleLabel}`,
-        `id：${task.id}`,
-        `状态：${task.enabled ? '已启用' : task.done ? '已完成（已停用）' : '已停用'}`,
-        `下次执行：${task.enabled && task.nextRunAt ? describeNext(task.nextRunAt, now) : '不再执行'}`,
+        `「${view.name}」· ${view.scheduleLabel}`,
+        `id：${view.id}`,
+        `状态：${view.enabled ? '已启用' : view.done ? '已完成（已停用）' : '已停用'}`,
+        `下次执行：${view.enabled && view.nextRunAt ? describeNext(view.nextRunAt, now) : '不再执行'}`,
         `上次执行：${run ? `${fmtWhen(run.finishedAt ?? run.queuedAt, now)} ${statusText(run.status)}` : '还没有运行记录'}`,
-        `通知策略：${publicTask(task).notifyPolicyLabel}${task.notifyPolicy ? '（本任务单独设定）' : '（跟随全局默认）'}`,
-        `累计执行：${Number(task.runCount) || 0} 次`,
-        task.cwd ? `工作目录：${task.cwd}` : '',
-        task.validUntil ? `有效期至：${task.validUntil}` : '',
+        `通知策略：${view.notifyPolicyLabel}${view.notifyPolicy ? '（本任务单独设定）' : '（跟随全局默认）'}`,
+        // runCount 只在收尾时累加（跳过的也不算）：说「累计完成」才和数字对得上
+        `累计完成：${view.runCount} 次${active > 0 ? ` · 另有 ${active} 条进行中` : ''}`,
+        view.cwd ? `工作目录：${view.cwd}` : '',
+        view.validUntil ? `有效期至：${view.validUntil}` : '',
         '提示词：',
-        task.prompt,
+        view.prompt,
       ].filter(Boolean)
-      return { text: lines.join('\n'), details: { task: publicTask(task) } }
+      return { text: lines.join('\n'), details: { task: view } }
     }
 
     let tasks = rt.state.tasks
@@ -178,7 +188,7 @@ const tools = {
       }
     }
     return {
-      text: `${tasks.length} 个定时任务\n\n${tasks.map((task, index) => taskLine(task, index + 1, now)).join('\n')}`,
+      text: `${tasks.length} 个定时任务\n\n${tasks.map((task, index) => taskLine(publicTask(task), index + 1, now)).join('\n')}`,
       details: { tasks: tasks.map(publicTask) },
     }
   },
@@ -194,7 +204,13 @@ const tools = {
     }
     const changed = Object.keys(patch).filter((key) => key !== 'schedule')
     if (patch.schedule) changed.push('调度')
-    const { task: saved } = await methods.saveTask({ task: { ...patch, id: task.id } })
+    // saveTask 会拒掉重名与非法值：转成 isError 而不是让宿主包成 "sched_update failed: …"
+    let saved
+    try {
+      ;({ task: saved } = await methods.saveTask({ task: { ...patch, id: task.id } }))
+    } catch (error) {
+      return fail(`未更新：${oneLine(error?.message ?? error, 300)}`)
+    }
     const next = saved.nextRunAt ? describeNext(saved.nextRunAt) : '不会执行（已停用或已过期）'
     return {
       text: [
@@ -226,6 +242,12 @@ const tools = {
     const task = taskById(id)
     if (!task) return fail(`没有 id 为 ${id} 的任务。先用 sched_list 查 id。`, undefined)
     const waitMs = Math.min(Math.max(0, Number(args.waitMs) || 0), 30_000)
+    // 一次性任务的手动执行是「预览」，不消费原定计划——不主动说明的话，
+    // 用户会以为测过就等于跑过了（v0.2.0 实测报告里就是这么困惑的）
+    const stillScheduled =
+      task.schedule?.kind === 'once' && task.enabled && task.nextRunAt
+        ? `\n原定 ${fmtWhen(task.nextRunAt)} 仍会照常执行（手动执行不影响计划）。`
+        : ''
     const result = await methods.runNow({ id: task.id, waitMs })
     if (!result.ok) {
       if (result.skipped === 'overlap') {
@@ -243,7 +265,7 @@ const tools = {
       const run = result.run
       const tail = run.output ? `\n结果（前 300 字）：\n${oneLine(run.output, 300)}` : run.error ? `\n错误：${oneLine(run.error, 300)}` : ''
       return {
-        text: `「${task.name}」本次执行结束：${statusText(run.status)}，用时 ${fmtDuration(run.durationMs)}。${tail}`,
+        text: `「${task.name}」本次执行结束：${statusText(run.status)}，用时 ${fmtDuration(run.durationMs)}。${tail}${stillScheduled}`,
         details: { id: task.id, runId: run.id, status: run.status, notify: run.notify },
       }
     }
@@ -252,7 +274,7 @@ const tools = {
         `已开始执行「${task.name}」（运行 id：${result.runId}）。`,
         '任务按顺序排队执行，可能要等前面的任务跑完；它不改变原本的下次执行时间。',
         '完成后结果会写进应用入口的「运行记录」；要现在查进度用 sched_runs({ taskId, limit: 1 })。',
-      ].join('\n'),
+      ].join('\n') + stillScheduled,
       details: { id: task.id, runId: result.runId, status: 'queued' },
     }
   },

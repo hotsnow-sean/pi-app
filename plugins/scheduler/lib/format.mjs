@@ -47,9 +47,17 @@ export function dayLabel(ts, now) {
   return sameYear ? `${d.getMonth() + 1} 月 ${d.getDate()} 日` : `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`
 }
 
-/** 今天 08:30 / 11 月 4 日 08:30 */
-export function fmtWhen(ts, now = Date.now()) {
-  return `${dayLabel(ts, now)} ${fmtClock(ts)}`
+/**
+ * 今天 08:30 / 11 月 4 日 08:30。
+ * `seconds` 只给「马上就要跑」的场景用：间隔任务显示到分钟会让人以为调度晚了
+ * （创建于 20:09:25、下次 20:10:25，列表上看着像「20:10 却没跑」）。
+ * @param {number} ts
+ * @param {number} [now]
+ * @param {{ seconds?: boolean }} [opts]
+ */
+export function fmtWhen(ts, now = Date.now(), opts = {}) {
+  const clock = opts.seconds ? `${fmtClock(ts)}:${pad2(new Date(ts).getSeconds())}` : fmtClock(ts)
+  return `${dayLabel(ts, now)} ${clock}`
 }
 
 /** 13 小时 / 45 分钟 / 2 天 */
@@ -67,9 +75,11 @@ export function humanizeSpan(ms) {
 /** 明天 08:30（还有 13 小时）——工具回执里复述下次执行时刻，模型不用自己算 */
 export function describeNext(ts, now = Date.now()) {
   if (!ts || !Number.isFinite(ts)) return '不再执行'
-  const when = fmtWhen(ts, now)
-  if (ts <= now) return `${when}（已到点，等待调度）`
-  return `${when}（还有 ${humanizeSpan(ts - now)}）`
+  const gap = ts - now
+  // 2 分钟内带上秒：这个尺度上「分钟」的四舍五入比不显示更误导
+  const when = fmtWhen(ts, now, { seconds: gap > 0 && gap < 120_000 })
+  if (gap <= 0) return `${when}（已到点，等待调度）`
+  return `${when}（还有 ${humanizeSpan(gap)}）`
 }
 
 /** 刚刚 / 3 分钟前 / 2 小时前 / 3 天前 */

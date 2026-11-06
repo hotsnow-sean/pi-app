@@ -153,16 +153,120 @@ describe('任务输入校验', () => {
     expect(missing.text).toContain('不存在')
   })
 
-  it('同名同提示词不重复创建', async () => {
-    await createTask()
+  it('同名即拒：提示词/调度不同也算重复', async () => {
+    const first = await createTask()
     const again = await tool('sched_create', {
       name: '每日简报',
-      prompt: '整理今天的工作安排，输出 3 条要点',
+      prompt: '换个提示词，但名字还是同一个',
       kind: 'daily',
-      time: '08:30',
+      time: '18:30',
     })
     expect(again.isError).toBe(true)
-    expect(again.text).toContain('已存在同名同提示词')
+    expect(again.text).toContain('已存在同名任务「每日简报」')
+    expect(again.text).toContain(first.details.id)
+    expect(again.text).toContain('每天 08:30')
+    expect((await invoke('snapshot')).tasks).toHaveLength(1)
+
+    // 改名撞上已有名字同样拦（update 走同一条 saveTask）
+    const other = await tool('sched_create', { name: '晚间简报', prompt: '晚上那趟', kind: 'daily', time: '21:00' })
+    const renamed = await tool('sched_update', { id: other.details.id, name: '每日简报' })
+    expect(renamed.isError).toBe(true)
+    expect(renamed.text).toContain('未更新：已存在同名任务「每日简报」')
+  })
+
+  it('UI 保存路径同样拒绝重名，改自己不算重名', async () => {
+    const first = await createTask()
+    // 规则长在 saveTask 上（UI 与工具的唯一写入口），不是只长在工具上
+    await expect(
+      invoke('saveTask', {
+        task: { name: '每日简报', prompt: '另一个活', schedule: { kind: 'daily', time: '09:00' } },
+      }),
+    ).rejects.toThrow(/已存在同名任务/)
+
+    const updated = await invoke('saveTask', {
+      task: { id: first.details.id, schedule: { kind: 'daily', time: '09:15' } },
+    })
+    expect(updated.task.scheduleLabel).toBe('每天 09:15')
+  })
+})
+
+describe('工具回执的可读性', () => {
+  // 这一组是「模板串漏字段」的护栏：scheduleLabel 这类派生字段只长在 publicTask()
+  // 的投影里，直接读原始任务会渲染成 undefined——v0.2.0 的 sched_list 就这么坏过。
+  it('列表与详情都能读出调度摘要，不出现 undefined / NaN', async () => {
+    const created = await createTask()
+    await invoke('runNow', { id: created.details.id })
+    await waitRuns(created.details.id)
+
+    const list = await tool('sched_list')
+    expect(list.text).toContain('· 每天 08:30 ·')
+    expect(list.text).not.toMatch(/undefined|NaN/)
+
+    const detail = await tool('sched_list', { id: created.details.id })
+    expect(detail.text).toContain('「每日简报」· 每天 08:30')
+    expect(detail.text).not.toMatch(/undefined|NaN/)
+    expect(detail.details.task.scheduleLabel).toBe('每天 08:30')
+  })
+
+  it('六条工具路径的输出都不含 undefined / NaN', async () => {
+    const created = await createTask()
+    const calls = [
+      ['sched_create', { name: '第二个任务', prompt: '另一个活', kind: 'weekly', weekday: 3, time: '07:05' }],
+      ['sched_list', {}],
+      ['sched_list', { id: created.details.id }],
+      ['sched_update', { id: created.details.id, name: '每日简报（改）' }],
+      ['sched_run_now', { id: created.details.id, waitMs: 5_000 }],
+      ['sched_runs', { limit: 5, withOutput: true }],
+    ]
+    for (const [name, args] of calls) {
+      const res = await tool(name, args)
+      expect(res.text, `${name} 的输出：${res.text}`).not.toMatch(/undefined|NaN/)
+    }
+  })
+
+  it('详情把「累计完成」和进行中的记录分开说', async () => {
+    let release
+    reply = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ ok: true, text: '慢活完成' })
+      })
+    const created = await createTask()
+    await invoke('runNow', { id: created.details.id })
+
+    const running = await tool('sched_list', { id: created.details.id })
+    expect(running.text).toContain('累计完成：0 次 · 另有 1 条进行中')
+
+    release()
+    await waitRuns(created.details.id)
+    const done = await tool('sched_list', { id: created.details.id })
+    expect(done.text).toContain('累计完成：1 次')
+    expect(done.text).not.toContain('进行中')
+  })
+
+  it('once 任务手动执行后提醒原定时间仍会执行', async () => {
+    const created = await tool('sched_create', {
+      name: '一次性提醒',
+      prompt: '提醒我喝水',
+      kind: 'once',
+      at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    })
+    const res = await tool('sched_run_now', { id: created.details.id, waitMs: 5_000 })
+    expect(res.text).toContain('仍会照常执行')
+
+    // 计划没被这次手动执行消费掉
+    const snap = await invoke('snapshot')
+    expect(snap.tasks[0].enabled).toBe(true)
+    expect(snap.tasks[0].nextRunAt).toBeGreaterThan(Date.now())
+  })
+
+  it('距下次执行不足 2 分钟时时间带秒（间隔任务不再看着像迟到）', async () => {
+    const res = await tool('sched_create', {
+      name: '一分钟循环',
+      prompt: '打个招呼',
+      kind: 'interval',
+      everyMinutes: 1,
+    })
+    expect(res.text).toMatch(/下次执行：今天 \d{2}:\d{2}:\d{2}（还有/)
   })
 })
 
@@ -496,7 +600,7 @@ describe('工具', () => {
 
     const detail = await tool('sched_list', { id: created.details.id })
     expect(detail.text).toContain('整理今天的工作安排')
-    expect(detail.text).toContain('累计执行：1 次')
+    expect(detail.text).toContain('累计完成：1 次')
   })
 
   it('sched_update 部分更新，只改传了的字段', async () => {
