@@ -180,7 +180,9 @@ export const methods = {
     save()
     for (const task of victims) removeTaskFiles(task)
     // 记录删完后再扫一遍目录：句柄已释放的残留（v8 报告 §八.2 的「惰性删除」）
-    // 与任何历史孤儿都会在这里被收走，不必等用户再点一次清理
+    // 与任何历史孤儿都会在这里被收走，不必等用户再点一次清理。
+    // 安全性由 sweepOrphanFiles 本体把关（rt.storageUsable）——读失败且没有任何
+    // 已知任务的一代，这里照样会被拦下（二轮复审 P1）
     sweepOrphanFiles()
     // 托盘按会话聚合推送：清 5 条同会话任务 = 1 次推送（逐条推是 5 次全窗口
     // 广播 + 5 次面板重算，结果完全一样——托盘本来就是一个会话一条）

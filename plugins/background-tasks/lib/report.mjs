@@ -230,7 +230,9 @@ export async function deliver(sessionFile, items, skipped) {
       delete task.tailText
     }
   } catch (error) {
-    rt.ctx.log('report delivery failed', error)
+    // send 挂起期间 deactivate 置空 rt.ctx 的窄窗口：catch 里再摸 ctx 必须带闸，
+    // 否则 unhandled rejection 会直接崩宿主进程（二轮复审 P2）
+    rt.ctx?.log?.('report delivery failed', error)
     for (const task of live) {
       task.report = 'failed'
       // 单独一个字段：task.error 装的是**任务本身**为什么失败（超时说明、spawn 错误），

@@ -861,4 +861,29 @@ describe("storage safety (review re-run)", () => {
     expect(currentStorage.seq).toBe(snapshot.seq)
     expect(currentStorage.tasks.map((t) => t.id)).toEqual(snapshot.tasks.map((t) => t.id))
   }, 30_000)
+
+  it("clearTasks must not sweep owned logs in a generation whose storage is unreadable", async () => {
+    // 二轮复审 P1：sweep 的守卫只设在 activate 调用点，clearTasks 内部的
+    // sweepOrphanFiles() 会绕过去——读失败一代 known 集合为空，一次顺手
+    // 的 bg_clear 就能把有主日志删光。守卫已下沉到 sweepOrphanFiles 本体
+    const res = await start({ command: "echo kept", label: "有主日志" })
+    const task = await waitDone(res.details.id)
+    await deactivate()
+
+    const logsDir = path.join(dataDir, "logs")
+    const brokenCtx = fakeCtx()
+    brokenCtx.storage.get = () => {
+      throw new Error("disk gone")
+    }
+    handle = await activate(brokenCtx)
+    // 读失败一代里清理照常可用（返回无可清理），但绝不能顺手动磁盘上的日志
+    const cleared = await handle.invoke("clearTasks", {})
+    expect(cleared.ok).toBe(true)
+    expect(fs.readdirSync(logsDir)).toContain(`${task.id}.log`)
+    await deactivate()
+
+    // 对照组照旧：表可用时 clear 后的扫尾正常收孤儿
+    handle = await activate(fakeCtx({ seq: 9, tasks: [] }))
+    expect(fs.readdirSync(logsDir).filter((n) => /^bg-\d+\.log$/.test(n))).toEqual([])
+  }, 30_000)
 })

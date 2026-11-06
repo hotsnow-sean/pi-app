@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, shell } from 'electron'
+import path from 'node:path'
 import { broadcastEvent, registerHandler } from '../ipc/registry'
 import { discoverPlugins, installPluginFromDir, removeUserPlugin } from './plugin-manager'
 import { activateEnabledPlugins, activatePlugin, applyPluginEnabled, deactivatePlugin, invokePlugin } from './plugin-host'
@@ -51,13 +52,19 @@ export function registerPluginHandlers(): void {
       plugins: plugins.map((p) => {
         // engines 拒载时 manifest 为空但 blockedManifest 保留：设置页要能显示
         // 这行插件是谁、为什么没加载，而不是让它无声消失
-        const m = p.manifest ?? p.blockedManifest
+        const identity = p.manifest ?? p.blockedManifest
+        // 贡献点只从「可激活的 manifest」取——blockedManifest 是完整解析产物，
+        // 若从这里取，拒载插件的入口/工具会跟着 catalog 下发（catalog 还会经
+        // 远程网关给手机端），渲染全靠下游 enabled 闸门兜着，太脆。结构上置空。
+        const m = p.manifest
         return {
-          id: m?.id ?? '',
-          name: m?.name ?? p.dir,
+          // 清单缺失/非法的行没有任何身份可用：用目录名合成一个仅展示用的 id，
+          // 让「清单有误」徽章与诊断信息可达（不可激活、开关已禁用）
+          id: identity?.id ?? `dir:${path.basename(p.dir)}`,
+          name: identity?.name ?? path.basename(p.dir),
           version: m?.version ?? '',
           description: m?.description ?? '',
-          icon: m?.icon ?? '',
+          icon: identity?.icon ?? '',
           enabled: p.enabled,
           error: p.error,
           errorKind: p.errorKind,
@@ -68,7 +75,7 @@ export function registerPluginHandlers(): void {
             id: v.id,
             title: v.title,
             description: v.description ?? '',
-            icon: v.icon ?? m?.icon ?? '',
+            icon: v.icon ?? m?.icon ?? identity?.icon ?? '',
             entry: v.entry,
           })),
           panels: (m?.panels ?? []).map((panel) => ({ id: panel.id, title: panel.title })),

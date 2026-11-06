@@ -345,10 +345,14 @@ export function disposeTasks() {
   for (const timer of timeouts.values()) clearTimeout(timer)
   timeouts.clear()
   // 进程句柄保留（不杀任务），但监听必须摘掉：exit 回调闭包捕获的是本代的
-  // state/save/report——留着它们，旧代就会跨代写盘、重复回报（见 disposed 注释）
+  // state/save/report——留着它们，旧代就会跨代写盘、重复回报（见 disposed 注释）。
+  // 只摘 exit/close（Node 22 实测 child 上没有内部 EventEmitter 监听，但按事件名摘
+  // 更稳）；'error' 补一个 noop——无监听的 error 事件是 uncaught exception，会崩宿主
   for (const child of children.values()) {
     try {
-      child.removeAllListeners()
+      child.removeAllListeners('exit')
+      child.removeAllListeners('close')
+      child.on('error', () => {})
     } catch {
       /* 句柄已经失效就不必再处理 */
     }

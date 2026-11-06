@@ -401,3 +401,35 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 - `sdk-runtime-changed` 广播仍有两处手写循环未换 `broadcastEvent`；
 - UI `api()` 无超时（宿主丢包时面板 Promise 永挂）、`cachedBash` 负缓存不随 dispose、
   `pendingDeletes` 重试预算是全局不是 per-file：均待下次顺手。
+
+---
+
+## 批次 7：二轮复审（三个子代理验证批次 6 的修复，2026-11-06 傍晚）
+
+三个并行复审代理分别验证：①插件本体修复正确性、②宿主 semver/blockedManifest、③测试守卫与文档。
+**结论：批次 6 的修复主体全部验证正确（removeAllListeners 实测无害、recover 条件 save 有效、
+semver 部分区语义表逐项实测通过、§26.4 行数 13 个数字全对上、守门测试全绿 288 条）。**
+
+### 二轮新发现与处置（已修）
+
+| 级别 | 问题 | 修法 |
+|---|---|---|
+| P1 | sweep 安全阀只设在 activate 调用点：`clearTasks` 与 pendingDeletes 重试路径照样能带着空 known 集合扫全目录，读失败一代一次顺手的 bg_clear 就删光有主日志 | 守卫下沉到 `sweepOrphanFiles` 本体（`rt.storageUsable`）；`save()` 在「读失败且无任务」时拒绝写空表（堵住跨代路径：空表写盘会让下一代认成可用表接着扫）；本代写入过**含任务**的表则视为完整真相，扫尾放行（首启 + 残留文件的既有场景不回归） |
+| P1 | semver 连字符区间 `1.4.0 - 2.0.0` 被静默误拒（违反文件头 fail-open 承诺；实测 host=1.4.2 对自家下端点都 false） | matchAndGroup 识别裸 `-` token 展开为 `>=lo <=hi`；端点不像版本号 → 整组 fail open。无空格的 `1.4.0-2.0.0` 按 npm 语义是带 prerelease 的版本，保持误拒=正确，加了断言钉住 |
+| P1 | 「imp 必须透传 +Q」守卫是全文存在性启发式：无关位置的 `+ Q`（注释/拼接）能骗过；换名定义静默跳过 | 收紧为断言 `+ Q` 出现在 `imp` 定义行内且由 `.href` 直接拼上 |
+| P2 | `deliver` catch 里 `rt.ctx.log` 未带闸：send 挂起期间 deactivate 的窄窗口会 unhandled rejection 崩宿主 | `rt.ctx?.log?.()` |
+| P2 | settings onChange 回调在 deactivate 置空 rt.ctx 后可能 TypeError（批次 6 新暴露面） | 同上 |
+| P2 | disposeTasks `removeAllListeners()` 后 child 的 error 事件成无监听 → uncaught exception | 只摘 exit/close，补 noop error 监听（Node 22 实测 child 无内部 EventEmitter 监听，原做法也不炸，但按事件名摘更稳） |
+| P2 | 详情视图启用开关未对 error 行禁用（列表禁了，详情能拨，会写脏 enabledMap） | 与列表行一致 `disabled={!!selected.error \|\| ...}` |
+| P2 | `errorKind:'manifest'` 行仍整行消失，「清单有误」徽章分支是死代码 | catalog 用 `dir:<目录名>` 合成仅展示 id，让该行可见（不可激活、开关已禁用） |
+| P2 | catalog 对 blocked 插件下发了完整 contributions（blockedManifest 是完整解析产物），全靠下游 enabled 闸门兜着 | catalog 的 views/panels/sessionBars/tools/settings 只从可激活的 `p.manifest` 取，blocked 结构性置空 |
+| P2 | 设计文档 §20.3 还有两处被吃的空串片段 | 补 `''` |
+
+### 已知残余（接受并记录）
+
+- **读失败一代自己 start 过任务后扫尾会删旧日志**：读失败 + 本代建过任务，内存表对新建任务是
+  完整真相、对旧记录不是——但旧记录已不可读，且该形状与「首启 + 磁盘有残留文件」不可区分，
+  后者必须扫（有回归测试钉着）。取舍：宁可漏删不可误删在「完全无知情」时成立。
+- semver prerelease 标识符整串字符串比较、`pluginDirVersion` 不跟 symlink、两处手写
+  `sdk-runtime-changed` 广播、UI `api()` 无超时、`cachedBash` 负缓存不 dispose、
+  `pendingDeletes` 重试预算全局——与批次 6 相同，维持待办。
