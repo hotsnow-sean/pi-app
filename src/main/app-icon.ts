@@ -1,24 +1,25 @@
 import { nativeImage } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { resolveAppRoot } from './bundle-paths'
 
 export function appIconCandidates(
   platform = process.platform,
   resourcesPath = process.resourcesPath,
-  moduleDir = __dirname,
+  appRoot = resolveAppRoot(),
 ): string[] {
   const icoCandidates = platform === 'win32'
     ? [
         join(resourcesPath, 'build', 'icon.ico'),
-        join(moduleDir, '../../build/icon.ico'),
+        join(appRoot, 'build', 'icon.ico'),
       ]
     : []
 
   return [
     ...icoCandidates,
     join(resourcesPath, 'build', 'icon.png'),
-    join(moduleDir, '../../build/icon.png'),
-    join(moduleDir, '../../resources/icon.png'),
+    join(appRoot, 'build', 'icon.png'),
+    join(appRoot, 'resources', 'icon.png'),
   ]
 }
 
