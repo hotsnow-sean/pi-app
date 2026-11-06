@@ -90,6 +90,29 @@ const TimelineItemBase = memo(function TimelineItem({
     const segments: Segment[] = (item.segments as Segment[] | undefined)?.length
       ? (item.segments as Segment[])
       : [{ type: 'text', text: String(item.text || '') }]
+    // 插件投递的回报（sessions.send）：渲染成左对齐「转述行」——来源徽标 + 浅底正文，
+    // 不带回溯/分叉（它不是用户输入，rewind 到它没有意义），与右侧用户气泡区分。
+    const origin = item.pluginOrigin as
+      | { pluginId: string; label: string; kind?: string; detail?: string }
+      | undefined
+    if (origin) {
+      const kindText = origin.kind === 'report' ? t('pluginMessage.kindReport') : origin.kind
+      return (
+        <div className="timeline-message-row timeline-plugin-row">
+          <div className="timeline-plugin-note">
+            <div className="timeline-plugin-badge">
+              <span className="timeline-plugin-badge-label">{origin.label}</span>
+              {kindText ? <span className="timeline-plugin-badge-kind">{kindText}</span> : null}
+            </div>
+            <div className="timeline-plugin-text">
+              {segments.map((s: Segment, i: number) =>
+                s.type === 'text' ? <span key={i}>{enrichPlainTextWithPaths(s.text)}</span> : null,
+              )}
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="timeline-message-row timeline-user-row">
         <MessageHoverShell

@@ -286,6 +286,35 @@ describe('worker session event lifecycle', () => {
     )
   })
 
+  it('forwards_plugin_report_message_start_with_origin', () => {
+    const harness = createSessionEventHarness()
+    const origin = { pluginId: 'background-tasks', label: '后台任务', kind: 'report', detail: 'bg-3' }
+
+    handleSessionEvent(
+      {
+        type: 'message_start',
+        message: {
+          role: 'custom',
+          customType: 'plugin_host_message',
+          content: 'bg-3 已完成',
+          display: true,
+          details: origin,
+        },
+      } as unknown as AgentSessionEvent,
+      harness.dependencies,
+    )
+
+    expect(harness.emittedEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'message',
+        role: 'user',
+        phase: 'start',
+        text: 'bg-3 已完成',
+        pluginOrigin: origin,
+      }),
+    )
+  })
+
   it('preserves structured details from tool progress updates', () => {
     const harness = createSessionEventHarness()
     const details = {

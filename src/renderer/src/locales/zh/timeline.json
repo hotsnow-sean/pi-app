@@ -243,5 +243,8 @@
   "mcp": {
     "noOutput": "（无输出）",
     "fullOutput": "完整输出："
+  },
+  "pluginMessage": {
+    "kindReport": "回报"
   }
 }

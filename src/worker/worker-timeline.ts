@@ -38,19 +38,43 @@ const extractToolResult = extractToolResultFromPiMessage
  * 不进界面），必须在这里挡掉。
  */
 export function pluginMessageText(message: unknown): string | null {
+  return pluginMessageParts(message)?.text ?? null
+}
+
+/**
+ * 插件投递消息的完整信息：正文 + 来源（origin 落盘在 message.details）。
+ * 界面用 origin 把这类消息渲染成「转述行」（`后台任务 · 回报` 徽标 + 左对齐浅底），
+ * 与用户自己输入的消息区分开——它们在模型侧占用户位，在界面上不该冒充用户。
+ */
+export function pluginMessageParts(message: unknown): {
+  text: string
+  origin: Record<string, unknown> | undefined
+} | null {
   const m = message as
-    | { role?: string; customType?: string; content?: unknown; display?: boolean }
+    | { role?: string; customType?: string; content?: unknown; display?: boolean; details?: unknown }
     | null
   if (!m || m.role !== 'custom') return null
   if (m.customType !== PLUGIN_MESSAGE_CUSTOM_TYPE) return null
   if (m.display === false) return null
   const content = m.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter((block) => (block as { type?: string })?.type === 'text')
-    .map((block) => String((block as { text?: string }).text ?? ''))
-    .join('\n')
+  let text: string
+  if (typeof content === 'string') text = content
+  else if (!Array.isArray(content)) text = ''
+  else
+    text = content
+      .filter((block) => (block as { type?: string })?.type === 'text')
+      .map((block) => String((block as { text?: string }).text ?? ''))
+      .join('\n')
+  return { text, origin: asPluginOrigin(m.details) }
+}
+
+/** details 只承认形状完整的 origin，防止插件乱写污染界面 */
+function asPluginOrigin(details: unknown): Record<string, unknown> | undefined {
+  const o = details as { pluginId?: unknown; label?: unknown } | null | undefined
+  if (!o || typeof o !== 'object') return undefined
+  if (typeof o.pluginId !== 'string' || !o.pluginId.trim()) return undefined
+  if (typeof o.label !== 'string' || !o.label.trim()) return undefined
+  return o as Record<string, unknown>
 }
 
 /** Always keep assistant rows (even empty) so incomplete turns remain rewound-able. */
@@ -106,7 +130,14 @@ export function normalizeMessages(messages: unknown[]): Array<Record<string, unk
     const pluginText = pluginMessageText(pm)
     if (pm.role === 'user' || pluginText !== null) {
       const text = pluginText ?? normalizeUserMessageDisplayText(extractText(pm))
-      if (text) items.push({ id: nextHistId(), type: 'user-message', text, timestamp: ts })
+      if (text)
+        items.push({
+          id: nextHistId(),
+          type: 'user-message',
+          text,
+          timestamp: ts,
+          ...(pluginText !== null ? { pluginOrigin: pluginMessageParts(pm)?.origin } : {}),
+        })
     } else if (pm.role === 'assistant') {
       const text = extractText(pm)
       const thinkingText = extractThinking(pm)
@@ -243,6 +274,7 @@ export function timelineItemsFromBranchPath(path: unknown[]): Array<Record<strin
           text: text || '',
           timestamp: ts,
           sessionEntryId: sid,
+          ...(pluginText !== null ? { pluginOrigin: pluginMessageParts(m)?.origin } : {}),
         })
       }
     } else if (m.role === 'assistant') {
