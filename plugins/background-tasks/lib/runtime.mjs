@@ -35,4 +35,9 @@ export const rt = {
   logDir: '',
   /** powershell 脚本落点 `<dataDir>/scripts`，activate 时确定 */
   scriptDir: '',
+  /** 本次激活是否真的读到了本插件写过的任务表（load() 写入）。
+   *  sweepOrphanFiles 据此设防：读失败一代的 known 集合是空的，任何路径
+   *  （activate / clearTasks / pendingDeletes 重试）触发扫尾都会把有主日志
+   *  全当孤儿删光，不可恢复。 */
+  storageUsable: false,
 }

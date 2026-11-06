@@ -102,6 +102,25 @@ describe('satisfiesHostRange', () => {
     expect(satisfiesHostRange('dev', '>=99.0.0')).toBe(true)
   })
 
+  it('连字符区间：1.4.0 - 2.0.0 ≙ >=1.4.0 <=2.0.0', () => {
+    expect(satisfiesHostRange('1.4.2', '1.4.0 - 2.0.0')).toBe(true)
+    expect(satisfiesHostRange('1.4.0', '1.4.0 - 2.0.0')).toBe(true)
+    expect(satisfiesHostRange('2.0.0', '1.4.0 - 2.0.0')).toBe(true)
+    expect(satisfiesHostRange('1.3.9', '1.4.0 - 2.0.0')).toBe(false)
+    expect(satisfiesHostRange('2.0.1', '1.4.0 - 2.0.0')).toBe(false)
+    // 与 AND / || 组合
+    expect(satisfiesHostRange(host, '1.4.0 - 2.0.0 !=3.0.0')).toBe(true)
+    expect(satisfiesHostRange(host, '2.4.0 - 3.0.0 || 1.4.0 - 1.5.0')).toBe(true)
+    // 端点不是版本号 → 整组 fail open（宽松而非误拒）
+    expect(satisfiesHostRange(host, '1.4.0 - latest')).toBe(true)
+    expect(satisfiesHostRange(host, '>= 1.4.0 - 2.0.0')).toBe(true)
+  })
+
+  it('无空格的 1.4.0-2.0.0 在 npm 语义里是带 prerelease 的版本，不是区间', () => {
+    expect(satisfiesHostRange('1.4.2', '1.4.0-2.0.0')).toBe(false)
+    expect(satisfiesHostRange('1.4.0-2.0.0', '1.4.0-2.0.0')).toBe(true)
+  })
+
   it('prerelease 按更小处理', () => {
     expect(satisfiesHostRange('1.4.2-beta.1', '>=1.4.2')).toBe(false)
     expect(satisfiesHostRange('1.4.2-beta.1', '>=1.4.1')).toBe(true)

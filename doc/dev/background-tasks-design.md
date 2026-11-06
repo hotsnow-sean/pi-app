@@ -902,8 +902,8 @@ if (signature !== lastSignature) { lastSignature = signature; rebuild() } else u
 
 ### 20.3 修法
 
-- 哨兵换成 `null`：`` 是「空列表」的**合法签名**，只有 `null` 才表示
-  「未知，必须重绘」；`rebuild()` 渲染空态时仍写 ``（它确实对应空签名）。
+- 哨兵换成 `null`：`''` 是「空列表」的**合法签名**，只有 `null` 才表示
+  「未知，必须重绘」；`rebuild()` 渲染空态时仍写 `''`（它确实对应空签名）。
 - 清空按钮改成**本地先摘再重绘**：`clearTasks` 成功后从 `state.tasks` 摘掉这批 id、
   清掉它们各自的输出缓存与流选择、关掉已展开项，`rebuild()` 立即生效，再 `tick()`
   与 main 对齐——不等 1.5s 轮询，也不受 `busy` 抢占影响。

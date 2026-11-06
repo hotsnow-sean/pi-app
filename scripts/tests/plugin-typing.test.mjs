@@ -174,7 +174,9 @@ describe('插件类型契约', () => {
   })
 
   it('定义了 imp() 的模块必须真的透传 ?v=（Q 来自 import.meta.url）', () => {
-    // imp() 少拼一个 `+ Q`，热重载就静默退化成「改了 lib 不生效」，10 条测试全绿（复审 P2-16）
+    // imp() 少拼一个 `+ Q`，热重载就静默退化成「改了 lib 不生效」，10 条测试全绿（复审 P2-16）。
+    // 二轮复审 P1：不能只看全文里有没有 `+ Q` 字样（无关拼接/注释会骗过守卫），
+    // 必须断言 `+ Q` 就在 imp() 的定义行内、由 .href 直接拼上
     const files = []
     for (const id of pluginIds()) {
       files.push(`${id}/main.mjs`)
@@ -187,11 +189,12 @@ describe('插件类型契约', () => {
     }
     for (const rel of files) {
       const src = readFileSync(join(pluginsDir, rel), 'utf8')
-      if (!/const imp = /.test(src)) continue
+      if (!/const imp\s*=/.test(src)) continue
+      const impLine = src.split('\n').find((l) => /const imp\s*=/.test(l))
       assert.match(
-        src,
-        /\+\s*Q\b/,
-        `${rel} 定义了 imp() 但没有把 Q 拼进 URL——热重载会拿到旧模块缓存`,
+        impLine,
+        /\.href\s*\+\s*Q\b/,
+        `${rel} 的 imp() 定义行没有把 Q 拼进 URL（.href + Q）——热重载会拿到旧模块缓存`,
       )
       assert.match(
         src,

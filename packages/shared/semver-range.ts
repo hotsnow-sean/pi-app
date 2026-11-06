@@ -10,6 +10,8 @@
  *   - 通配与缺省组件：`1.x`、`1.4.x`、`*`；`1.4` 作为 range ≙ `1.4.x`（npm 语义）；
  *     比较符下的缺省/通配组件按 npm 部分区语义展开
  *     （`>1.4` ≙ `>=1.5.0`、`<=1.4` ≙ `<1.5.0`、`<1.x` ≙ `<1.0.0`、`<=1.4.x` ≙ `<1.5.0`）
+ *   - 连字符区间：`1.4.0 - 2.0.0` ≙ `>=1.4.0 <=2.0.0`（端点两侧必须带空格——
+ *     无空格的 `1.4.0-2.0.0` 在 npm 语义里是「带 prerelease 的版本」，不是区间）
  *   - 组合：空格 = AND，`||` = OR
  *
  * prerelease：宿主版本带 prerelease 按更小处理（semver 语义）；range 目标带
@@ -135,14 +137,28 @@ function matchComparator(version: Triple, op: string, raw: string): boolean {
   }
 }
 
+/** npm 允许作为连字符区间端点的写法（全/部分版本，可带 prerelease） */
+const HYPHEN_ENDPOINT = /^[vV]?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/
+
 /** 解析一个 AND 组（空格分隔），全部满足才算满足 */
 function matchAndGroup(version: Triple, group: string): boolean {
   const tokens = group.trim().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return false
-  // 比较符与版本号之间允许空格：`>= 1.4.0` 先拼回一个 token 再解析
   const merged: string[] = []
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]
+    if (t === '-') {
+      // 连字符区间 `1.4.0 - 2.0.0` ≙ `>=1.4.0 <=2.0.0`。npm 只认带空格的写法
+      // （无空格是 prerelease 版本），这里同样只处理带空格的。任一侧不是
+      // 版本号 → 整组 fail open：区间语法没解析成功不该判死插件
+      const lo = merged.pop()
+      const hi = i + 1 < tokens.length ? tokens[i + 1] : undefined
+      if (!lo || !hi || !HYPHEN_ENDPOINT.test(lo) || !HYPHEN_ENDPOINT.test(hi)) return true
+      merged.push(`>=${lo}`)
+      merged.push(`<=${hi}`)
+      i++
+      continue
+    }
     if ((BARE_OPS as string[]).includes(t) && i + 1 < tokens.length) {
       merged.push(t + tokens[i + 1])
       i++

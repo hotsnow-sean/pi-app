@@ -341,7 +341,8 @@ export function PluginsSettings() {
           <div className="shrink-0 pt-1">
             <Switch
               checked={selected.enabled}
-              disabled={toggling === selected.id}
+              // 与列表行一致：带错误的插件不可激活，开关拨了也只会写脏 enabledMap
+              disabled={!!selected.error || toggling === selected.id}
               onCheckedChange={() => void toggleEnabled(selected)}
             />
           </div>

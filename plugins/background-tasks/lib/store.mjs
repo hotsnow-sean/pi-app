@@ -32,8 +32,9 @@ export function loadSettings() {
 /**
  * 读任务表。返回「读到了一份本插件写过的表」：
  * false = 首次启动或读失败（宿主 readStorage 是 fail open，文件损坏时静默返回 {}）。
- * 调用方（activate）据此决定要不要扫孤儿文件——把损坏后的空表当真，
- * sweepOrphanFiles 会把有主日志全当孤儿删掉，不可恢复（复审 P1）。
+ * 结果同时记进 rt.storageUsable——sweepOrphanFiles 自己也要看这个标志：
+ * 它除了 activate 还有 clearTasks / pendingDeletes 重试两个调用点，
+ * 只靠 activate 那一处判断，另两条路照样能把有主日志删光（二轮复审 P1）。
  */
 export function load() {
   try {
@@ -53,9 +54,11 @@ export function load() {
         : [],
     }
     if (!usable) rt.ctx?.log?.('storage looks empty or unreadable, orphan sweep will be skipped')
+    rt.storageUsable = usable
     return usable
   } catch (error) {
     rt.state = { seq: 0, tasks: [] }
+    rt.storageUsable = false
     rt.ctx?.log?.('storage load failed, orphan sweep will be skipped', error)
     return false
   }
@@ -65,12 +68,24 @@ export function save() {
   // 停用后旧代回调（disposeTasks 摘监听之外的第二道闸）不得再写盘：
   // storage.set 是整份覆盖，会把新代刚写好的任务表抹掉
   if (!rt.ctx) return
+  // 读失败一代不得用「空表」覆盖磁盘：宿主 readStorage 是 fail open，
+  // 磁盘上的表可能只是暂时读不出来——写一份 {seq:0,tasks:[]} 会把它变成
+  // 「合法空表」，下一代 activate 照样认成可用表并扫孤儿（二轮复审 P1 的跨代路径）。
+  // 本代自己建过任务（tasks 非空）时照写：新任务的持久化优先，旧记录反正已读不出
+  if (!rt.storageUsable && rt.state.tasks.length === 0) {
+    rt.ctx?.log?.('save skipped: storage was not readable and there is nothing to persist')
+    return
+  }
   try {
     rt.ctx.storage.set({
       seq: rt.state.seq,
       // tailText 只在内存里活到回报完成，不落盘
       tasks: rt.state.tasks.map(({ tailText, ...rest }) => rest),
     })
+    // 写入过含任务的表 = 本代对「磁盘上该有哪些任务」有了完整真相（哪怕是
+    // 读失败一代，旧记录反正已读不出）：此后扫孤儿是安全的，sweepOrphanFiles
+    // 的守卫据此放行。写空表不置位——那只是抹掉证据，不是真相
+    if (rt.state.tasks.length > 0) rt.storageUsable = true
   } catch (error) {
     rt.ctx?.log?.('storage save failed', error)
   }

@@ -63,6 +63,13 @@ export function removeTaskFiles(task) {
  * 删除失败的文件也靠它兜底重试（最多 5 轮）。
  */
 export function sweepOrphanFiles() {
+  // 安全阀设在扫尾函数本体内而不是 activate 调用点：clearTasks 与
+  // pendingDeletes 重试也会走到这里（二轮复审 P1），读失败一代的 known
+  // 集合是空的，扫下去就是把磁盘上有主日志全删光。宁可漏删不可误删。
+  if (!rt.storageUsable) {
+    rt.ctx?.log?.('orphan sweep skipped: storage was not readable this activation')
+    return
+  }
   const known = new Set(rt.state.tasks.map((t) => t && t.id).filter(Boolean))
   for (const dir of [rt.logDir, rt.scriptDir]) {
     if (!dir) continue
