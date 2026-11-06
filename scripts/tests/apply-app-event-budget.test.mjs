@@ -9,7 +9,8 @@ const root = process.cwd()
 describe('apply-app-event router budget', () => {
   it(`apply-app-event.ts <= ${MAX_LINES} lines`, () => {
     const path = join(root, 'src/renderer/src/stores/apply-app-event.ts')
-    const lines = readFileSync(path, 'utf8').split(/\r?\n/).length
+    // 末尾换行不该算一行：文件正好 120 行时 split 会得到 121 个元素
+    const lines = readFileSync(path, 'utf8').replace(/\r?\n$/, '').split(/\r?\n/).length
     assert.ok(lines <= MAX_LINES, `apply-app-event.ts has ${lines} lines, max ${MAX_LINES}`)
   })
   it('handlers live in apply-app-event-handlers.ts', () => {

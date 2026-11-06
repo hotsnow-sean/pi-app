@@ -25,9 +25,8 @@ function barOf(summary: string) {
   return {
     summary,
     detail: '',
-    tone: 'active' as const,
+    tone: 'running' as const,
     rows: [],
-    panelId: null,
   }
 }
 

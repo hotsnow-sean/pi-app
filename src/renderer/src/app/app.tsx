@@ -16,7 +16,7 @@ import { TopBar } from '@renderer/components/app/top-bar'
 import { ImmersiveChrome } from '@renderer/components/app/immersive-chrome'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { onAppEvent, onWorkerExit, onNotificationOpenSession, ipcClient } from '@renderer/lib/ipc-client'
-import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
+import { syncPluginComposerBars } from '@renderer/lib/plugin-composer-bar-sync'
 import { handleNotificationOpenSession } from '@renderer/lib/notification-open-session'
 
 import { activateWorkspace } from '@renderer/lib/activate-workspace'
@@ -299,33 +299,16 @@ export default function App() {
       }
       useUIStore.getState().processEvent(event)
     })
-    // 插件托盘启动兜底：插件激活可能早于本窗口挂上事件监听（上面这行还没生效），
-    // 那段时间的 plugin_widget 推送已经丢了——表现为「重启后面板里有列表、
-    // 托盘消失」。main 侧存着所有托盘的当前状态，这里拉一次按原事件重放；
-    // processEvent 会按 sessionFile 路由到各会话的 state，幂等多拉无害。
-    let replaySeq = 0
-    void ipcClient
-      .invoke('plugins.composerBars.list')
-      .then((res) => {
-        const bars = (res?.bars ?? []) as Array<{
-          pluginId: string
-          sessionFile: string
-          bar: PluginComposerBarState
-        }>
-        for (const { pluginId, sessionFile, bar } of bars) {
-          if (!pluginId || !sessionFile || !bar) continue
-          useUIStore.getState().processEvent({
-            type: 'plugin_widget',
-            seq: ++replaySeq,
-            workspaceId: '',
-            sessionFile,
-            timestamp: Date.now(),
-            pluginId,
-            bar,
-          })
-        }
+    // 插件托盘启动兜底：插件激活与本窗口挂事件监听是并行的，谁先谁后都可能，
+    // 两条链路都可能丢（推送早于订阅 / 拉取早于插件 activate）——先拉一次，
+    // 再补一次延迟拉，覆盖「插件激活得慢」的那条路。
+    const syncBars = (): void => {
+      void syncPluginComposerBars().catch((e: unknown) => {
+        console.warn('[plugin-bars] sync failed:', e)
       })
-      .catch(() => {})
+    }
+    syncBars()
+    const barsRetry = window.setTimeout(syncBars, 1500)
     void import('@renderer/lib/session-worker-sync').then(({ fetchWorkerLiveSnapshot }) => {
       fetchWorkerLiveSnapshot()
         .then((snap) => useUIStore.getState().setWorkerLiveSnapshot(snap))
@@ -353,11 +336,22 @@ export default function App() {
     window.addEventListener('pi-desktop:open-session', onOpenSession)
     return () => {
       window.removeEventListener('pi-desktop:open-session', onOpenSession)
+      window.clearTimeout(barsRetry)
       unsubEvents()
       unsubExit()
       unsubNotify()
     }
   }, [setWorkspace])
+
+  // 切会话时再对一次账：启动那一拉可能早于插件 activate（拿到空表），
+  // 之后插件补推又可能撞在别的会话上——用户切回目标会话时从 main 拉一次最可靠。
+  const viewSessionFile = useUIStore((s) => s.historySessionFile)
+  useEffect(() => {
+    if (!viewSessionFile) return
+    void syncPluginComposerBars().catch((e: unknown) => {
+      console.warn('[plugin-bars] sync on session switch failed:', e)
+    })
+  }, [viewSessionFile])
 
   useEffect(() => {
     if (pendingExtensionConfig) {
