@@ -90,6 +90,18 @@ describe('插件类型契约', () => {
     assert.ok(include.includes('*/main.mjs'), 'plugins/tsconfig.json 的 include 必须含 */main.mjs')
   })
 
+  it('npm run typecheck 仍然带着插件检查', () => {
+    // 光有 tsconfig 没用：`typecheck` 是 CI/提交前唯一会跑的命令，从里面
+    // 挪掉 typecheck:plugins，插件的类型错误就再也没人看得见（且完全不报错）
+    const pkg = JSON.parse(read('package.json'))
+    assert.match(
+      pkg.scripts?.typecheck ?? '',
+      /typecheck:plugins/,
+      'typecheck 必须串 typecheck:plugins，否则插件侧类型检查形同不存在',
+    )
+    assert.ok(pkg.scripts?.['typecheck:plugins'], '缺 typecheck:plugins 脚本')
+  })
+
   it('SDK 入口只做转出，不复制结构', () => {
     const sdk = read('plugins/plugin-sdk.d.ts')
     assert.match(
