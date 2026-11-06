@@ -991,3 +991,40 @@ if (signature !== lastSignature) { lastSignature = signature; rebuild() } else u
 `bg_output` 的 offset 已经到日志末尾时原本说「没有输出。」——读起来像「这个任务根本没输出」。
 现在按 `nextOffset >= totalBytes` 判定为「已读到末尾（没有新内容）。」（运行中则说
 「已读到末尾，暂时没有新输出。」）。插件版本 v0.6.3。
+
+## 23. v0.6.4：日志文件的孤儿与惰性删除（v8 报告 §八）
+
+v8 报告把功能与文案问题都清零了，剩下两条都是**文件卫生**问题。
+
+### 23.1 被拒绝的 `bg_start` 留下孤儿日志
+
+`startTask()` 的顺序是「建空日志文件 → `buildSpawnSpec()` 校验 shell 兼容性」，
+顺序反了：`shell:'cmd'` 撞上 bash 语法时抛错，任务记录没建，但 `bg-N.log/.err`
+已经躺在磁盘上。它们**没有记录可循**，而 `bg_clear` 是按记录工作的，于是永远清不到。
+
+改成「建文件 + 校验」整体包在 try/catch 里，失败即删文件并把 `state.seq` 退回原位
+（否则任务列表里会出现无解释的空号）。`spawn` 同步抛错也走同一条清理。
+
+另：`removeTaskFiles()` 现在连 `<id>.ps1` 一起删——脚本类任务每次都会写一份脚本
+文件，此前从来没人删过，是同一类泄漏。
+
+### 23.2 删除是惰性的：句柄没释放就静默失败
+
+删记录时会 `rmSync` 两个文件，Windows 上子进程句柄可能还没释放 → `EBUSY/EPERM`
+→ 原来的 `catch {}` 默默吞掉，于是「清完看目录还在，再点一次清理才消失」。
+
+现在两道：
+
+- `tryRemoveFile()` 删不掉就记进 `pendingDeletes`，`scheduleSweep()` 1.2s 后重试
+  （最多 5 轮，`unref` 不拖住进程退出）；
+- `sweepOrphanFiles()` 扫 `logs/` 与 `scripts/`，把**没有任务记录**的 `bg-N.*`
+  收掉。调用时机：`activate()`（每次启动清一次历史遗留）、`clearTasks()` 之后
+  （不必等用户再点一次），以及删除失败后的延时重试。
+
+扫目录是这类问题的**唯一**出口：孤儿文件没有记录，任何按记录工作的 API 都够不着。
+
+### 23.3 测试
+
+`main.test.mjs` 新增 3 条（`log file hygiene`）：被拒绝的启动不留文件且不烧 id、
+`clearTasks` 扫掉孤儿（`bg-901.*`、`bg-902.ps1`）但不误伤有记录的任务、
+`activate` 清掉上一轮遗留。回滚到旧代码验证过：三条全失败。

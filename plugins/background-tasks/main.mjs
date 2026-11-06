@@ -56,6 +56,9 @@ let settings = { ...SETTING_DEFAULTS }
 let state = { seq: 0, tasks: [] }
 let logDir = ''
 let probeTimer = null
+/** 孤儿文件扫尾的定时器与重试计数（见 sweepOrphanFiles） */
+let sweepTimer = null
+let sweepAttempts = 0
 let unsubscribeRuns = null
 /** sessionFile → 最近一次见到的 run phase（仅用于面板提示，不参与投递决策） */
 const sessionPhases = new Map()
@@ -511,31 +514,51 @@ function startTask({ command, label, cwd, sessionFile, shell, timeoutSeconds }) 
     timeoutMs = 0
   }
 
+  const prevSeq = state.seq
   state.seq += 1
   const id = `bg-${state.seq}`
   const logPath = path.join(logDir, `${id}.log`)
   const errPath = path.join(logDir, `${id}.err`)
   fs.mkdirSync(logDir, { recursive: true })
-  // 先建空文件：路径/权限问题要在启动时暴露，而不是让 shell 悄悄失败
-  fs.writeFileSync(logPath, '')
-  fs.writeFileSync(errPath, '')
 
-  const spec = buildSpawnSpec({ command: cmd, logPath, errPath, requestedShell: shell, id })
-  const child = spec.line
-    ? spawn(spec.line, {
-        cwd: workdir,
-        shell: true,
-        windowsHide: true,
-        // 刻意不 detached：Electron 主进程里 detached 子进程在本机表现为「起了但从不退出、
-        // 也不产出任何输出」。宿主退出时 Node 不会主动杀子进程，所以任务照样能活下来；
-        // 停任务时按 pid 直接杀（Windows 走 taskkill /T 连带子进程树）。
-        stdio: 'ignore',
-      })
-    : spawn(spec.file, spec.args, {
-        cwd: workdir,
-        windowsHide: true,
-        stdio: 'ignore',
-      })
+  let spec
+  try {
+    // 先建空文件：路径/权限问题要在启动时暴露，而不是让 shell 悄悄失败
+    fs.writeFileSync(logPath, '')
+    fs.writeFileSync(errPath, '')
+    spec = buildSpawnSpec({ command: cmd, logPath, errPath, requestedShell: shell, id })
+  } catch (error) {
+    // 校验（cmd 下的 bash 语法、找不到 bash）发生在文件建好之后——被拒绝的启动
+    // 不能留下孤儿日志：它们没有任务记录，bg_clear 永远够不着（v8 报告 §八.3）。
+    // seq 也退回去，让被拒的 id 不被占用（否则任务列表里出现无解释的空号）。
+    state.seq = prevSeq
+    tryRemoveFile(logPath)
+    tryRemoveFile(errPath)
+    throw error
+  }
+  let child
+  try {
+    child = spec.line
+      ? spawn(spec.line, {
+          cwd: workdir,
+          shell: true,
+          windowsHide: true,
+          // 刻意不 detached：Electron 主进程里 detached 子进程在本机表现为「起了但从不退出、
+          // 也不产出任何输出」。宿主退出时 Node 不会主动杀子进程，所以任务照样能活下来；
+          // 停任务时按 pid 直接杀（Windows 走 taskkill /T 连带子进程树）。
+          stdio: 'ignore',
+        })
+      : spawn(spec.file, spec.args, {
+          cwd: workdir,
+          windowsHide: true,
+          stdio: 'ignore',
+        })
+  } catch (error) {
+    state.seq = prevSeq
+    tryRemoveFile(logPath)
+    tryRemoveFile(errPath)
+    throw error
+  }
 
   const task = {
     id,
@@ -689,16 +712,79 @@ function statSize(file) {
   }
 }
 
-/** 一条任务的两个输出文件，删记录时一起收掉，别留孤儿日志 */
+/** 日志/脚本目录里的文件名：bg-<数字>.log|err|ps1 */
+const TASK_FILE_RE = /^(bg-\d+)\.(log|err|ps1)$/
+/** 删不掉的文件（句柄未释放）：扫尾时重试 */
+const pendingDeletes = new Set()
+const SWEEP_RETRY_MS = 1_200
+const SWEEP_MAX_ATTEMPTS = 5
+
+function tryRemoveFile(file) {
+  if (!file) return true
+  try {
+    fs.rmSync(file, { force: true })
+    pendingDeletes.delete(file)
+    return true
+  } catch {
+    // Windows 上进程句柄还没释放时会 EBUSY/EPERM：先记下，扫尾时再收
+    pendingDeletes.add(file)
+    return false
+  }
+}
+
+/** 一条任务的两个输出文件（及 powershell 脚本），删记录时一起收掉，别留孤儿 */
 function removeTaskFiles(task) {
-  for (const file of [task.logPath, task.errPath]) {
-    if (!file) continue
+  const files = [task.logPath, task.errPath]
+  if (task.id && scriptDir) files.push(path.join(scriptDir, `${task.id}.ps1`))
+  let failed = false
+  for (const file of files) {
+    if (!tryRemoveFile(file)) failed = true
+  }
+  // 删不掉的别默不作声：稍后再扫一遍，句柄释放后就收走了
+  if (failed) scheduleSweep()
+}
+
+/**
+ * 扫目录，收掉**没有任务记录**的 bg-* 文件。
+ *
+ * 这类孤儿用 bg_clear 永远清不到（它按记录工作），而它们会一直累积：被拒绝的启动、
+ * 删除时句柄未释放、历史上漏删的 powershell 脚本。启动时与每次清理后各扫一遍；
+ * 删除失败的文件也靠它兜底重试（最多 5 轮）。
+ */
+function sweepOrphanFiles() {
+  const known = new Set(state.tasks.map((t) => t && t.id).filter(Boolean))
+  for (const dir of [logDir, scriptDir]) {
+    if (!dir) continue
+    let names = []
     try {
-      fs.rmSync(file, { force: true })
+      names = fs.readdirSync(dir)
     } catch {
-      /* 文件可能已经不在 */
+      continue
+    }
+    for (const name of names) {
+      const m = TASK_FILE_RE.exec(name)
+      if (!m || known.has(m[1])) continue
+      tryRemoveFile(path.join(dir, name))
     }
   }
+  if (pendingDeletes.size > 0) {
+    // 还有收不掉的（多半是句柄冲突）：再等一会儿重试，但只重试有限次
+    if (sweepAttempts < SWEEP_MAX_ATTEMPTS) {
+      sweepAttempts += 1
+      scheduleSweep(SWEEP_RETRY_MS)
+    }
+  } else {
+    sweepAttempts = 0
+  }
+}
+
+function scheduleSweep(delay = SWEEP_RETRY_MS) {
+  if (sweepTimer) return
+  sweepTimer = setTimeout(() => {
+    sweepTimer = null
+    sweepOrphanFiles()
+  }, delay)
+  if (typeof sweepTimer.unref === 'function') sweepTimer.unref()
 }
 
 function pruneTasks() {
@@ -1418,6 +1504,9 @@ const methods = {
     state.tasks = state.tasks.filter((t) => !clearedIds.includes(t.id))
     save()
     for (const task of victims) removeTaskFiles(task)
+    // 记录删完后再扫一遍目录：句柄已释放的残留（v8 报告 §八.2 的「惰性删除」）
+    // 与任何历史孤儿都会在这里被收走，不必等用户再点一次清理
+    sweepOrphanFiles()
     for (const task of victims) pushBarForTask(task)
     // missing 只算真正不存在的 id：运行中被 keepRunning 挡下的任务存在且活着，
     // 把它报成「id 不存在」会让人以为记错了 id（v6 实测踩过）
@@ -1483,6 +1572,9 @@ export async function activate(pluginContext) {
 
   load()
   recover()
+  // 收掉历史遗留的孤儿日志（被拒绝启动的、删不掉的、早期漏删的 ps1）：
+  // 它们没有任务记录，bg_clear 永远够不着，只能靠扫目录
+  sweepOrphanFiles()
 
   // 重启后补推托盘：托盘只在任务事件时推送，重启后没有任何事件，
   // 结果就是面板里有列表、对话框上方却毫无痕迹。面板能看到的，托盘也得能看到。
@@ -1541,6 +1633,10 @@ export async function deactivate() {
   reportQueues.clear()
   // 重载后任务 id 不会复用，旧标记只会变成内存垃圾
   deletedIds.clear()
+  if (sweepTimer) clearTimeout(sweepTimer)
+  sweepTimer = null
+  sweepAttempts = 0
+  pendingDeletes.clear()
   // 超时定时器只是「谁盯着」而非「任务本身」：插件卸载后不再兜底，任务继续跑
   for (const timer of timeouts.values()) clearTimeout(timer)
   timeouts.clear()

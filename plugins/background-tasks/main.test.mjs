@@ -625,3 +625,55 @@ describe('restart and wording (v0.6.1)', () => {
     await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } }).catch(() => {})
   }, 30_000)
 })
+
+describe("log file hygiene (v8 report)", () => {
+  it("a rejected bg_start leaves no orphan log files and does not burn an id", async () => {
+    // v8 §八.3：校验发生在日志文件建好之后，被拒绝的启动留下 0 字节 bg-N.log/.err，
+    // 它们没有任务记录，bg_clear 永远清不到
+    const logsDir = path.join(dataDir, "logs")
+    const before = fs.readdirSync(logsDir)
+
+    const rejected = await start({ command: "for i in 1 2; do echo $i; done", shell: "cmd" })
+    expect(rejected.isError).toBe(true)
+    expect(fs.readdirSync(logsDir)).toEqual(before)
+
+    // seq 也不该被这个失败消耗掉：任务列表里不该出现无解释的空号
+    const ok = await start({ command: "echo fine", label: "接着启动" })
+    expect(ok.details.id).toBe("bg-1")
+    await waitDone(ok.details.id)
+  }, 40_000)
+
+  it("bg_clear sweeps orphan files that no record points at", async () => {
+    // 句柄未释放导致删不掉、或历史上漏删的文件：扫目录是唯一能把它们收掉的途径
+    const logsDir = path.join(dataDir, "logs")
+    const scriptsDir = path.join(dataDir, "scripts")
+    fs.writeFileSync(path.join(logsDir, "bg-901.log"), "")
+    fs.writeFileSync(path.join(logsDir, "bg-901.err"), "")
+    fs.writeFileSync(path.join(scriptsDir, "bg-902.ps1"), "")
+    // 有记录的任务文件必须留着，别误伤
+    const live = await start({ command: "echo keep-me", label: "保留" })
+    const task = await waitDone(live.details.id)
+
+    await handle.invoke("clearTasks", {})
+
+    const logs = fs.readdirSync(logsDir)
+    const scripts = fs.readdirSync(scriptsDir)
+    expect(logs).not.toContain("bg-901.log")
+    expect(logs).not.toContain("bg-901.err")
+    expect(scripts).not.toContain("bg-902.ps1")
+    // 被清掉的任务自身文件也不该留下
+    expect(logs).not.toContain(`${task.id}.log`)
+  }, 40_000)
+
+  it("activate sweeps leftovers from a previous run", async () => {
+    const logsDir = path.join(dataDir, "logs")
+    await deactivate()
+    fs.writeFileSync(path.join(logsDir, "bg-777.log"), "")
+    handle = await activate(fakeCtx(currentStorage))
+    try {
+      expect(fs.readdirSync(logsDir)).not.toContain("bg-777.log")
+    } finally {
+      await deactivate()
+    }
+  }, 20_000)
+})
