@@ -136,6 +136,32 @@ export function skipText(reason) {
   }
 }
 
+/**
+ * 「这次为什么没打扰你」。
+ *
+ * 早期版本靠 `notify === 'none' && signal.changed === false` 推「无变化」，于是
+ * `never` / `failures` 策略下的记录完全没有标注——读起来像「通知了」。现在原因码
+ * （run.notifyWhy）由引擎在收尾时记下来，文案只在这一处维护。
+ *
+ * 返回空串表示不必标注：已发送、手动执行（触发方式已标「手动」）、老记录但推不出原因。
+ * @param {any} run
+ */
+export function notifyLabel(run) {
+  switch (run?.notifyWhy) {
+    case 'never':
+      return '从不通知（策略）'
+    case 'failures-ok':
+      return '未失败（策略不提示）'
+    case 'unchanged':
+      return '无变化（策略不提示）'
+    case 'manual':
+      return ''
+    default:
+      // v0.3 之前的记录没有 notifyWhy：只能按「结果没变」这一条推
+      return run?.notify === 'none' && run?.signal?.changed === false ? '无变化（未提示）' : ''
+  }
+}
+
 /** 触发方式：scheduled 是常态，不标——标了等于噪声 */
 export function triggerText(trigger) {
   if (trigger === 'missed') return '补跑'

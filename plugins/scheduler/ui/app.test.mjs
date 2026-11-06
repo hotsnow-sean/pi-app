@@ -66,6 +66,7 @@ function run(id, taskId, extra = {}) {
     error: '',
     skipReason: '',
     notify: 'sent',
+    notifyLabel: '',
     signal: { changed: true, source: 'protocol', summary: '有变化' },
     seen: true,
     outputPreview: '结果预览',
@@ -270,6 +271,26 @@ describe('应用入口 UI', () => {
     const days = [...detail.querySelectorAll('.tl-day')].map((el) => el.textContent.trim())
     expect(days).toEqual(['今天', '昨天'])
     expect(detail.textContent).toContain('失败')
+  })
+
+  it('未通知的记录直接显示插件算好的原因，不用自己推断', async () => {
+    tasks = [task('t1')]
+    runs = [
+      run('r-never', 't1', { notify: 'none', notifyWhy: 'never', notifyLabel: '从不通知（策略）' }),
+      run('r-same', 't1', {
+        notify: 'none',
+        notifyWhy: 'unchanged',
+        notifyLabel: '无变化（策略不提示）',
+        signal: { changed: false, source: 'protocol', summary: '没变化' },
+      }),
+    ]
+    loadUi()
+    await waitFor(() => cards().length === 1, '列表出现')
+    document.querySelector('#app .task-card').click()
+    await waitFor(() => document.querySelector('#app .tl-row'), '时间线出现')
+    const detail = document.querySelector('#app .col-detail')
+    expect(detail.textContent).toContain('从不通知（策略）')
+    expect(detail.textContent).toContain('无变化（策略不提示）')
   })
 
   it('展开一条记录才拉全文，再点一次收起', async () => {

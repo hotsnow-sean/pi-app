@@ -562,8 +562,11 @@ describe('条件通知', () => {
       expect(runs).toHaveLength(3)
       const byName = Object.fromEntries(runs.map((run) => [run.taskName, run]))
       expect(byName['静默监控'].notify).toBe('none')
+      expect(byName['静默监控'].notifyWhy).toBe('unchanged')
       expect(byName['喝水提醒'].notify).toBe('sent')
+      expect(byName['喝水提醒'].notifyWhy).toBe('')
       expect(byName['彻底静默'].notify).toBe('none')
+      expect(byName['彻底静默'].notifyWhy).toBe('never')
       // 只发一条：静默监控「无变化」、彻底静默 policy=never
       expect(notified.map((item) => item.title)).toEqual(['定时任务：喝水提醒'])
       expect(notified[0].body).toContain('该喝水了')
@@ -572,6 +575,124 @@ describe('条件通知', () => {
       expect(inboxed[0].body).toContain('该喝水了')
       expect(inboxed[0].tone).toBe('success')
       expect(inboxed[0].target).toEqual({ pluginId: 'scheduler', viewId: 'main' })
+    },
+    30_000,
+  )
+
+  it('SCHED:failed → 记为失败，原因进 error，正文保留，且不污染基线', async () => {
+    reply = async () => ({ ok: true, text: '构建失败：3 个测试挂了\nSCHED:failed: 3 个测试未通过' })
+    const created = await createTask({ notifyPolicy: 'failures' })
+    await invoke('runNow', { id: created.details.id })
+    const [run] = await waitRuns(created.details.id)
+    expect(run.status).toBe('failed')
+    expect(run.error).toBe('3 个测试未通过')
+    expect(run.outputPreview).toContain('构建失败')
+    expect(run.outputPreview).not.toContain('SCHED:')
+
+    // 失败不更新基线：下一次 prompt 里不该出现这次失败留下的半截结论
+    await invoke('runNow', { id: created.details.id })
+    await waitRuns(created.details.id, 2)
+    expect(promptCalls[1].prompt).toContain('暂无（这是首次执行')
+    expect(promptCalls[1].prompt).not.toContain('构建失败')
+  })
+
+  it('SCHED:failed 不写原因时，用输出首行当失败原因', async () => {
+    reply = async () => ({ ok: true, text: '窗口没打开，抓不到数据\nSCHED:failed' })
+    const created = await createTask()
+    await invoke('runNow', { id: created.details.id })
+    const [run] = await waitRuns(created.details.id)
+    expect(run.status).toBe('failed')
+    expect(run.error).toBe('窗口没打开，抓不到数据')
+  })
+
+  it(
+    '未通知时记录原因：never / failures 成功都在运行记录里写明白',
+    async () => {
+      const at = new Date(Date.now() + 1_500).toISOString()
+      reply = async () => ({ ok: true, text: '跑完了，一切正常' })
+      await tool('sched_create', {
+        name: '永不通知',
+        prompt: '永不通知地跑一遍',
+        kind: 'once',
+        at,
+        notifyPolicy: 'never',
+      })
+      await tool('sched_create', {
+        name: '只在失败时通知',
+        prompt: '只在失败时通知地跑一遍',
+        kind: 'once',
+        at,
+        notifyPolicy: 'failures',
+      })
+
+      const deadline = Date.now() + 20_000
+      let finished = []
+      while (Date.now() < deadline) {
+        finished = (await invoke('listRuns', { limit: 20 })).runs.filter(
+          (run) => run.status !== 'queued' && run.status !== 'running',
+        )
+        if (finished.length >= 2) break
+        await WAIT(200)
+      }
+      const byName = Object.fromEntries(finished.map((run) => [run.taskName, run]))
+      // 两条都是「策略决定不通知」，但原因不同——不能都留空让人以为通知过了
+      expect(byName['永不通知'].notify).toBe('none')
+      expect(byName['永不通知'].notifyWhy).toBe('never')
+      expect(byName['永不通知'].notifyLabel).toContain('从不通知')
+      expect(byName['只在失败时通知'].notify).toBe('none')
+      expect(byName['只在失败时通知'].notifyWhy).toBe('failures-ok')
+      expect(byName['只在失败时通知'].notifyLabel).toContain('未失败')
+      expect(notified).toHaveLength(0)
+
+      // 工具回执同样带这句说明（模型不该靠「没有标注」去猜）
+      const listed = await tool('sched_runs', { limit: 10 })
+      expect(listed.text).toContain('从不通知（策略）')
+      expect(listed.text).toContain('未失败（策略不提示）')
+
+      // 落盘 → 重启后原因不能丢：normalizeRun 是白名单，漏字段等于重启即失忆
+      await deactivate()
+      handle = await activate(fakeCtx())
+      const afterRestart = (await invoke('listRuns', { limit: 10 })).runs
+      expect(Object.fromEntries(afterRestart.map((run) => [run.taskName, run.notifyWhy]))).toMatchObject({
+        永不通知: 'never',
+        只在失败时通知: 'failures-ok',
+      })
+    },
+    30_000,
+  )
+
+  it(
+    'failures 策略下 SCHED:failed 真的会通知（自报失败也算失败）',
+    async () => {
+      const at = new Date(Date.now() + 1_500).toISOString()
+      reply = async () => ({ ok: true, text: '部署失败：镜像构建超时\nSCHED:failed: 镜像构建超时' })
+      await tool('sched_create', {
+        name: '部署检查',
+        prompt: '检查部署并汇报结果',
+        kind: 'once',
+        at,
+        notifyPolicy: 'failures',
+      })
+
+      const deadline = Date.now() + 20_000
+      let run = null
+      while (Date.now() < deadline) {
+        const res = await invoke('listRuns', { limit: 10 })
+        run = res.runs.find(
+          (item) => item.taskName === '部署检查' && item.status !== 'queued' && item.status !== 'running',
+        )
+        if (run) break
+        await WAIT(200)
+      }
+      expect(run.status).toBe('failed')
+      expect(run.error).toBe('镜像构建超时')
+      expect(run.notify).toBe('sent')
+      // 系统通知与信箱都该有一条，且是 error 语气
+      expect(notified).toHaveLength(1)
+      expect(notified[0].body).toContain('执行失败')
+      expect(inboxed).toHaveLength(1)
+      expect(inboxed[0].title).toContain('定时任务失败')
+      expect(inboxed[0].tone).toBe('error')
     },
     30_000,
   )

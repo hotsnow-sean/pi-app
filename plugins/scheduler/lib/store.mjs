@@ -89,6 +89,8 @@ function normalizeRun(run) {
     error: String(run.error || ''),
     skipReason: String(run.skipReason || ''),
     notify: String(run.notify || 'none'),
+    // 白名单式归一化：漏一个字段就等于「重启后丢」，所以加字段必须同步这里
+    notifyWhy: String(run.notifyWhy || ''),
     signal: run.signal && typeof run.signal === 'object' ? run.signal : null,
     seen: run.seen !== false,
     v: 1,

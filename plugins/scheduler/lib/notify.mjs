@@ -70,17 +70,46 @@ export function decideNotify(task, info) {
   return { send, policy }
 }
 
-/** 输出协议：最后一行 `SCHED:changed` / `SCHED:unchanged`（大小写不敏感） */
+/**
+ * 没发送时记下**为什么**，供运行记录展示（`format.notifyLabel` 负责翻译成中文）。
+ *
+ * 不记原因就只能靠「有没有标注」猜，`never` / `failures` 成功那两格会被误读成
+ * 「通知过了」。手动执行也记（但它已有「手动」标记，不再额外显示文案）。
+ * @param {{ policy: string, ok: boolean, changed: boolean, manual: boolean }} info
+ */
+export function notifySkipReason(info) {
+  if (info.manual) return 'manual'
+  if (info.policy === 'never') return 'never'
+  if (info.policy === 'failures' && info.ok) return 'failures-ok'
+  if (info.policy === 'on-change' && info.ok && !info.changed) return 'unchanged'
+  return ''
+}
+
+/**
+ * 输出协议：
+ * - `SCHED:changed` / `SCHED:unchanged`：结果有没有变化；
+ * - `SCHED:failed[: 原因]`：本次任务整体失败（脚本退出码非 0、结论就是「没做成」）。
+ *
+ * 「失败」必须由 agent 自报：插件的 ok 只代表**会话**跑完了，不代表任务目标达成。
+ * 自动拿退出码判失败会大面积误报——agent 探索时敲错一条命令是常态。
+ *
+ * failed 优先级最高（它与 changed/unchanged 互斥，混写说明 agent 自己没想清楚，
+ * 按更严重的那个算）。@returns {{ kind: 'changed'|'unchanged'|'failed', reason: string } | null}
+ */
 export function parseToken(text) {
-  const matches = [...String(text ?? '').matchAll(/^[ \t]*SCHED:(changed|unchanged)[ \t]*$/gim)]
+  const matches = [
+    ...String(text ?? '').matchAll(/^[ \t]*SCHED:(changed|unchanged|failed)(?:[ \t]*[:：][ \t]*(.*))?[ \t]*$/gim),
+  ]
   if (matches.length === 0) return null
-  return matches[matches.length - 1][1].toLowerCase()
+  const failed = matches.filter((m) => m[1].toLowerCase() === 'failed').pop()
+  const last = failed ?? matches[matches.length - 1]
+  return { kind: last[1].toLowerCase(), reason: String(last[2] ?? '').trim() }
 }
 
 /** 把协议行从正文里摘掉：它是给插件的指令，不该出现在用户读的结果里 */
 export function stripToken(text) {
   return String(text ?? '')
-    .replace(/^[ \t]*SCHED:(?:changed|unchanged)[ \t]*$/gim, '')
+    .replace(/^[ \t]*SCHED:(?:changed|unchanged|failed)(?:[ \t]*[:：].*)?[ \t]*$/gim, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -130,6 +159,9 @@ export function buildPrompt(task, runId) {
     '- 如果这次结论与下面的「上次结论」相比没有任何实质变化：在最终答复的最后一行写 `SCHED:unchanged`。',
   )
   lines.push('- 如果有变化，或者这是首次执行：最后一行写 `SCHED:changed`。')
+  lines.push(
+    '- 如果这次任务整体算失败（例如要跑的命令退出码非 0、窗口没打开、数据没取到）：最后一行写 `SCHED:failed: 一句话原因`，代替上面两个标记。',
+  )
   lines.push(
     `- 可选（更可靠）：把一句话摘要写成 JSON 文件 \`${signal}\`，内容形如 {"changed":true,"summary":"一句话结论"}。写完仍然要用一句话回复结论，但不要再调用任何工具。`,
   )

@@ -446,10 +446,10 @@ v0.2 落 P0 的全部内容（零宿主改动）：
 | 部件 | 做法 |
 | --- | --- |
 | 基线 | 插件自动保存上次结论摘要（600 字），执行前拼进 prompt；首次执行标「无历史基线」 |
-| 信号 | 双通道：结果文件（`dataDir/signals/<runId>.json`）+ 输出协议（`SCHED:changed` / `SCHED:unchanged`），任一命中即采信 |
+| 信号 | 双通道：结果文件（`dataDir/signals/<runId>.json`）+ 输出协议（`SCHED:changed` / `SCHED:unchanged` / `SCHED:failed`），任一命中即采信 |
 | 兜底 | 都失败 → 按「有变化」通知（fail-open to notify），`signalSource: 'fallback'` |
 | 策略 | 任务级 `notifyPolicy`：`always` / `on-change` / `failures` / `never` |
-| 留痕 | 无变化不弹通知，但 run 记录标 `notify: 'suppressed'` + 「无变化·未通知」，UI 必须可见 |
+| 留痕 | 未通知的 run 记 `notify: 'none'` + 原因码 `notifyWhy`（`never` / `failures-ok` / `unchanged` / `manual`），人读文案由 `format.notifyLabel()` 统一出，UI 与 `sched_runs` 都读它 |
 
 开始通知仍由 `notifyOnStart` 控制（默认开）；结束通知改为按 `notifyPolicy` 决定。
 
@@ -750,3 +750,48 @@ UI 与工具的唯一写入口，规则只有一份（此前 UI 允许重名任�
   列表/详情无 undefined、六条路径输出扫描、累计完成与进行中、once 手动执行提示、秒级时间）；
 - `plugins/scheduler/ui/app.test.mjs` 8 条；`npm run test:scripts` 288 条；
   `npm run typecheck` 全链通过；`plugin-manifest.installed.test.ts` 4 条通过。
+
+## 15. v13 复测反馈（v0.4，2026-11-06）
+
+复测报告两项遗留：①未通知标注不区分策略；②`failures` 的失败分支无法构造。
+
+### 15.1 未通知标注改为策略感知
+
+旧实现：UI 与 `sched_runs` 都用 `notify === 'none' && signal.changed === false` 推「无变化 · 未通知」。
+只在 `on-change` 下成立，`never` / `failures`（成功）那两格完全没有标注，**「没有标注」被读成
+「通知过了」**。
+
+现在由引擎在收尾时算原因码，文案只在 `format.notifyLabel()` 一处：
+
+| 场景 | `notify` | `notifyWhy` | 展示 |
+| --- | --- | --- | --- |
+| 已发送 | `sent` | `''` | 无标注（有标记 = 发过了） |
+| 手动 `runNow` | `none` | `manual` | 不额外标注（触发方式已标「手动」） |
+| 策略 `never` | `none` | `never` | 从不通知（策略） |
+| `failures` 且成功 | `none` | `failures-ok` | 未失败（策略不提示） |
+| `on-change` 且无变化 | `none` | `unchanged` | 无变化（策略不提示） |
+
+老记录（本版之前落盘的 run）没有 `notifyWhy`：回落到「`notify==='none'` 且 `changed===false`」这一条推断，
+不猜其它策略，避免给历史记录编造原因。
+
+### 15.2 `SCHED:failed`：让「失败」可表达、可测
+
+原来 `run.status` 只取决于 `runAgentPrompt` 的 `ok`，即**会话**是否跑完（异常/超时才算失败）。
+于是 `failures` 策略在真实使用中也几乎不可能触发——脚本退出码非 0 时 agent 照样会回一段话，
+会话是「成功」的。报告把它归为「无法构造」，其实是语义缺口，不只是测试问题。
+
+选**显式协议**而不是自动判退出码：agent 探索时敲错一条命令是常态，自动判失败会大面积误报；
+而「整体算不算失败」只有 agent 知道。
+
+- 协议：`SCHED:failed: 一句话原因`（原因可省，省略时取输出首行）
+- `SCHED:failed` 优先级高于 `changed` / `unchanged`（混写按更严重的算）
+- 命中后：`status='failed'`、`error=原因`、**保留正文**（诊断线索）、不更新基线、
+  `failures` / `on-change` / `always` 策略下照常通知（`never` 依旧静默）
+- 协议行不留在正文里（与 changed/unchanged 同样是给插件的指令）
+
+### 15.3 验证
+
+- `plugins/scheduler/main.test.mjs` 41 条（37 → 41）：`SCHED:failed` 的失败态/原因/正文/基线不污染、
+  无原因时回落首行、`never` 与 `failures` 成功的原因码与工具回执文案（含重启后仍保留，`normalizeRun`
+  是白名单字段）、`failures` + `SCHED:failed` 的系统通知与信箱闭环；到点用例补三条 `notifyWhy` 断言
+- `plugins/scheduler/ui/app.test.mjs` 9 条（8 → 9）：时间线直接显示插件算好的原因

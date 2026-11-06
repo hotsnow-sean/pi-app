@@ -535,7 +535,8 @@ function runRowHtml(run, opts) {
   if (run.trigger === 'manual') flags.push('手动')
   if (run.status === 'skipped' && run.skipReason) flags.push(skipText(run.skipReason))
   if (run.status === 'interrupted' && run.skipReason === 'app_exit') flags.push('应用退出')
-  if (run.notify === 'none' && run.signal && run.signal.changed === false) flags.push('无变化 · 未通知')
+  // 未通知的原因由插件侧算好（notifyLabel），UI 不再靠 signal.changed 自己推断
+  if (run.notifyLabel) flags.push(run.notifyLabel)
   const when = run.finishedAt ?? run.startedAt ?? run.queuedAt
   return `
     <div class="tl-row ${open ? 'open' : ''}" data-run="${run.id}">
