@@ -107,6 +107,45 @@ export interface PluginAskOptions {
   signal?: AbortSignal
 }
 
+/**
+ * 信箱条目的观感。宿主只拿它挑图标与颜色，**不解释业务语义**——和托盘那套
+ * （`PluginComposerBarState.state`）是同一个原则：插件说观感，宿主决定长什么样。
+ */
+export type PluginInboxTone = 'info' | 'success' | 'warn' | 'error'
+
+/** 点信箱条目跳到哪个插件的哪个视图（manifest `views[].id`） */
+export interface PluginInboxTarget {
+  pluginId: string
+  viewId: string
+}
+
+/**
+ * 投进宿主信箱的一条。
+ *
+ * 定位是「值得你知道的一次事件」，不是归档：宿主信箱是 main 侧的内存数组
+ * （重启即空，上限 200 条），完整历史必须留在插件自己的存储里，条目点开只是
+ * 跳到插件视图。所以标题一行、正文一两句，别把结果全文塞进来。
+ */
+export interface PluginInboxItem {
+  /** 一行标题。宿主会截断，别放长句 */
+  title: string
+  /** 摘要（一两句）。详情归插件视图 */
+  body?: string
+  /** 观感；缺省按 info */
+  tone?: PluginInboxTone
+  /**
+   * 点击后跳到哪。**不传也能用**——条目照常进信箱、照常标已读，
+   * 只是点不动（未读红点仍然会提醒）。
+   */
+  target?: PluginInboxTarget
+  /**
+   * 同一个 key 只保留最新一条。不传 = 每次都新增一条。
+   *
+   * 定时任务按任务 id 去重：每分钟跑一次的监控任务不该把 200 格信箱刷满。
+   */
+  dedupeKey?: string
+}
+
 /** 插件 → 宿主的界面能力 */
 export interface PluginUI {
   /**
@@ -121,6 +160,16 @@ export interface PluginUI {
    * 状态词是观感（active/ok/error/idle/warn）而不是业务状态。详情放右栏面板。
    */
   setComposerBar(sessionFile: string, bar: PluginComposerBarState | null): void
+  /**
+   * 投一条到顶栏信箱（与「一轮跑完」的完成卡同一个信箱、同一个未读红点）。
+   *
+   * 用途是**跨会话、跨时间**的提醒：定时任务、监控类插件跑完时用户可能正在
+   * 干别的事，弹系统通知会被忽略，信箱留一条「值得你知道」的记录更可靠。
+   * 条目不落盘（重启即空），所以别把它当历史——历史留在插件自己的存储里。
+   *
+   * 不抛错：参数不合法（缺 title）时只打日志。宿主信箱满了自然淘汰最旧的。
+   */
+  inbox(item: PluginInboxItem): void
 }
 
 /** `ctx.runAgentPrompt` 的参数 */

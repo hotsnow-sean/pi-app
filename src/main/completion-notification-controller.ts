@@ -6,6 +6,7 @@ import {
   type CompletionOutcome,
   type CompletionPreviewMode,
 } from '@shared/completion-preview'
+import type { PluginInboxItem } from '@shared/plugin-context'
 import { normalizeSessionFilePath, sessionFilePathsEqual } from '@shared/session-file-path'
 
 export type CompletionNotificationSettings = {
@@ -36,6 +37,14 @@ export type CompletionCard = {
   kind?: 'done' | 'needs-you'
   unread?: boolean
   createdAt?: number
+  /**
+   * 插件投递的条目：点击时跳插件视图而不是切会话。
+   * 与 `sessionFile` 是两条互斥的落点（`sessionFile` 是「回到那段对话」，
+   * `target` 是「打开那个插件页」）。
+   */
+  target?: { pluginId: string; viewId: string }
+  /** 插件条目的观感；宿主自己产生的完成卡不带（按 outcome 推导） */
+  tone?: 'info' | 'success' | 'warn' | 'error'
 }
 
 export type CompletionDeliverer = (card: CompletionCard) => void
@@ -165,6 +174,42 @@ export function createCompletionNotificationController(deps: CompletionControlle
     if (inbox.length > MAX_SEEN) inbox.length = MAX_SEEN
   }
 
+  /**
+   * 插件投递一条（`ctx.ui.inbox` 的落点）。
+   *
+   * 与完成卡共用同一个 `inbox` 数组，所以未读红点、标已读、徽章计数都是现成的。
+   * `dedupeKey` 命中时先移除旧条目再插入：同一任务的多次通知只留最新一条，
+   * 否则每分钟跑一次的监控任务会把 200 格信箱刷满、把红点永久点亮。
+   */
+  function pushPluginInbox(pluginId: string, item: PluginInboxItem): void {
+    const title = String(item.title || '').trim()
+    if (!title) return
+    const notificationId = item.dedupeKey
+      ? `p:${pluginId}:${item.dedupeKey}`
+      : `p-${deps.now()}-${++seq}`
+    const existing = inbox.findIndex((row) => row.notificationId === notificationId)
+    if (existing >= 0) inbox.splice(existing, 1)
+    rememberInbox({
+      notificationId,
+      workspaceId: '',
+      // outcome 只被渲染层用来挑图标/颜色；插件条目以 tone 为准
+      outcome: item.tone === 'error' ? 'failed' : 'success',
+      copy: {
+        projectLabel: '',
+        title,
+        body: String(item.body || '').trim(),
+        meta: '',
+        openLabel: '',
+        dismissLabel: '',
+        muteLabel: '',
+      },
+      timeoutMs: 0,
+      sound: false,
+      tone: item.tone,
+      target: item.target,
+    })
+  }
+
   function flush(item: Pending): void {
     pending.delete(item.notificationId)
     const settings = deps.getSettings()
@@ -275,6 +320,7 @@ export function createCompletionNotificationController(deps: CompletionControlle
     markInboxUnread,
     markInboxRead,
     rememberInbox,
+    pushPluginInbox,
     dispose,
   }
 }

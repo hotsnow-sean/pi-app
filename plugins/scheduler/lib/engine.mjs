@@ -29,6 +29,7 @@ const {
   decideNotify,
   notifyStarted,
   notifyFinished,
+  sendInbox,
   notifyQueueFull,
 } = await imp('notify')
 const { oneLine } = await imp('format')
@@ -205,5 +206,9 @@ async function execute(item, gen) {
   saveTasks()
   pruneRuns(task.id)
 
-  if (decision.send) notifyFinished(task, run)
+  // 两条通道各自成败：系统通知可能被系统设置吞掉，信箱是站内兜底
+  if (decision.send) {
+    notifyFinished(task, run)
+    sendInbox(task, run)
+  }
 }

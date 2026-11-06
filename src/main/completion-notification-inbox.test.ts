@@ -205,3 +205,81 @@ describe('completion inbox with default alert settings', () => {
     vi.useRealTimers()
   })
 })
+
+describe('plugin inbox', () => {
+  function makeCtrl() {
+    const delivered: unknown[] = []
+    const ctrl = createCompletionNotificationController({
+      now: () => Date.now(),
+      delayMs: 0,
+      getSettings: () => ({
+        soundEnabled: true,
+        notificationEnabled: true,
+        alertOnRunIdle: true,
+        alertOnBackgroundRunIdle: true,
+        alertOnRunFailed: true,
+        alertOnCancelled: false,
+        timeoutSeconds: 15,
+        previewMode: 'response',
+        onlyWhenUnfocused: false,
+        dndUntil: null,
+        delivery: 'custom',
+        language: 'zh',
+      }),
+      getWindowState: () => ({ focused: true, visible: true, minimized: false }),
+      getVisibleSessionFile: () => null,
+      projectLabel: () => 'proj',
+      deliver: (card) => delivered.push(card),
+    })
+    return { ctrl, delivered }
+  }
+
+  it('进同一个信箱、默认未读、不弹系统通知', () => {
+    const { ctrl, delivered } = makeCtrl()
+    ctrl.pushPluginInbox('scheduler', {
+      title: '定时任务：每日简报',
+      body: '有变化：3 条新评论',
+      tone: 'success',
+      target: { pluginId: 'scheduler', viewId: 'main' },
+    })
+    const [item] = ctrl.listInbox()
+    expect(ctrl.listInbox()).toHaveLength(1)
+    expect(item.unread).toBe(true)
+    expect(item.copy.title).toBe('定时任务：每日简报')
+    expect(item.copy.body).toBe('有变化：3 条新评论')
+    expect(item.target).toEqual({ pluginId: 'scheduler', viewId: 'main' })
+    expect(item.tone).toBe('success')
+    // 插件条目只是「留个记录」，不能走完成卡的弹窗/声音通道
+    expect(delivered).toHaveLength(0)
+  })
+
+  it('dedupeKey 命中时替换旧条目并重新变未读', () => {
+    const { ctrl } = makeCtrl()
+    ctrl.pushPluginInbox('scheduler', { title: '第一次', dedupeKey: 'task-1' })
+    const first = ctrl.listInbox()[0]
+    ctrl.markInboxRead(first.notificationId)
+    ctrl.pushPluginInbox('scheduler', { title: '第二次', dedupeKey: 'task-1' })
+
+    expect(ctrl.listInbox()).toHaveLength(1)
+    expect(ctrl.listInbox()[0].copy.title).toBe('第二次')
+    expect(ctrl.listInbox()[0].unread).toBe(true)
+    expect(ctrl.listInbox()[0].notificationId).toBe(first.notificationId)
+  })
+
+  it('不同插件/不同 key 互不覆盖；error 观感映射成失败色', () => {
+    const { ctrl } = makeCtrl()
+    ctrl.pushPluginInbox('a', { title: 'A', dedupeKey: 'x' })
+    ctrl.pushPluginInbox('b', { title: 'B', dedupeKey: 'x' })
+    ctrl.pushPluginInbox('a', { title: 'A 失败', dedupeKey: 'y', tone: 'error' })
+    expect(ctrl.listInbox()).toHaveLength(3)
+    const failed = ctrl.listInbox().find((row) => row.copy.title === 'A 失败')
+    expect(failed?.outcome).toBe('failed')
+    expect(failed?.tone).toBe('error')
+  })
+
+  it('没有 title 的条目被丢弃（插件传空不该占格子）', () => {
+    const { ctrl } = makeCtrl()
+    ctrl.pushPluginInbox('scheduler', { title: '   ' })
+    expect(ctrl.listInbox()).toHaveLength(0)
+  })
+})

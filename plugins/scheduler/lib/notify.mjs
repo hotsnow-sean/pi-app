@@ -175,6 +175,40 @@ export function notifyFinished(task, run) {
   }
 }
 
+/**
+ * 投一条到宿主顶栏信箱（`ctx.ui.inbox`）。
+ *
+ * 与系统通知的分工：系统通知是「现在打扰你」，信箱是「回来时还看得到」。
+ * 两者独立成败——通知被系统设置吞掉、或用户当场划走，信箱里仍然留一条；
+ * 而信箱不落盘（宿主重启即空），所以**完整流水仍然在应用入口的 runs.jsonl**。
+ *
+ * 条件与系统通知一致（`decision.send` 且非手动）。同一任务按 taskId 去重：
+ * 每分钟跑一次的监控任务只会在信箱里留最新一条，不会把 200 格刷满。
+ * @param {any} task
+ * @param {any} run
+ */
+export function sendInbox(task, run) {
+  if (!isLive()) return false
+  if (run.trigger === 'manual') return false
+  const inbox = rt.ctx?.ui?.inbox
+  // 老宿主没有这个能力（或插件被降级加载）：静默跳过，不影响执行与系统通知
+  if (typeof inbox !== 'function') return false
+  const failed = run.status === 'failed'
+  try {
+    inbox({
+      title: failed ? `定时任务失败：${task.name}` : `定时任务：${task.name}`,
+      body: summaryLine(run),
+      tone: failed ? 'error' : 'success',
+      target: { pluginId: rt.ctx.pluginId, viewId: 'main' },
+      dedupeKey: task.id,
+    })
+    return true
+  } catch (error) {
+    log('inbox failed', error)
+    return false
+  }
+}
+
 /** 开始通知（设置项可关；手动运行不弹） */
 export function notifyStarted(task, trigger) {
   if (!isLive()) return false

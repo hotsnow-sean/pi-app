@@ -100,6 +100,7 @@ let ctx
 | `ctx.notify(title, body)` | 系统通知（点击聚焦应用） |
 | `ctx.ui.ask(questions, opts)` | 弹宿主问卷并等用户作答（ask 插件的全部依赖） |
 | `ctx.ui.setComposerBar(sessionFile, bar)` | 往**输入框上方的托盘**推一条摘要（见 §6.2）；`null` = 这个会话没有东西可显示 |
+| `ctx.ui.inbox(item)` | 投一条到**顶栏信箱**（与「一轮跑完」的完成卡同一个信箱，见 §6.3） |
 | `ctx.runAgentPrompt({cwd, prompt, timeoutMs})` | 起一个**独立 inMemory 会话**跑一次 prompt，阻塞到结束。用户看不见、历史不连续 |
 | `ctx.sessions.send(spec)` | 往**用户自己的会话**投递消息并驱动一轮（见 §3） |
 | `ctx.sessions.onRunEvent(cb)` | 订阅会话运行事件（见 §4） |
@@ -251,9 +252,39 @@ ctx.ui.setComposerBar(sessionFile, {
   托盘随之消失，**不会留一条空壳把输入框顶下去**。
 - 状态走 app event（`plugin_widget`），不是轮询：任务从「运行中」变「结束」是 main 侧才知道的时刻。
 
+### 6.3 顶栏信箱（`ctx.ui.inbox`）
+
+「这件事已经发生，你现在不在跟前」的落点：与「一轮跑完」的完成卡**共用同一个信箱**
+（同一个未读红点、同一个 Dock 徽章计数、同一套标已读），区别只是点开之后跳哪。
+
+```ts
+ctx.ui.inbox({
+  title: '定时任务：每日简报',        // 一行，宿主会截断
+  body: '有变化：3 条新评论',          // 一两句摘要，详情归插件视图
+  tone: 'success',                    // info | success | warn | error（只影响图标与颜色）
+  target: { pluginId: 'scheduler', viewId: 'main' },  // 点开跳到哪个插件的哪个视图
+  dedupeKey: 'task-123',              // 同一个 key 只留最新一条
+})
+```
+
+**它是什么、不是什么**：
+
+- 是「值得你知道的一次事件」；**不是归档**。宿主信箱是 main 侧内存数组（上限 200 条、
+  重启即空），完整历史必须留在插件自己的存储里（定时任务放在 `runs.jsonl`）。
+- 不弹系统通知、不发声——想同时打扰用户就自己调 `ctx.notify`。两者**独立成败**：
+  通知可能被系统设置吞掉，信箱还在。
+- 没有 `target` 也能用：条目照常进信箱、照常点亮未读，只是点不动。
+- `dedupeKey` 命中时**替换旧条目并重新变未读**。高频任务（每分钟一次）必须给：
+  否则 200 格信箱会被同一个任务刷满，红点也永远消不掉。
+
+**边界**：`title` 为空时宿主直接丢弃（只打日志），不抛错——后台执行路径不该因为
+一次信箱写入失败而中断。点击行为是「切中央视图」，**不带参数**：定位到具体那条记录
+要靠插件自己的未读标记（`snapshot.unreadByTask` 那类），别指望宿主把 runId 传进去。
+
+
 ## 7. 已知限制
 
-- 没有通用的 `plugin-events`：除托盘外，main 侧仍不能主动推 UI，面板只能轮询（后台任务面板是 1.5 秒）。
+- 没有通用的 `plugin-events`：除托盘与信箱外，main 侧仍不能主动推 UI，面板/信箱都靠轮询（后台任务面板 1.5 秒、顶栏信箱 4 秒）。
 - 没有 `ctx.agents`：插件不能自养常驻子会话。
 - 工具调用透传的 `cwd` 是 worker 当前工作目录，不保证等于会话 workspace 根（切过 worktree 时会变）。
 - `plugin-context` 的 `sessionFile` 来自 renderer（`historySessionFile`），工具体收到的

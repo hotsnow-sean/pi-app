@@ -20,6 +20,10 @@ type InboxItem = {
   copy?: { title?: string; body?: string }
   unread?: boolean
   createdAt?: number
+  /** 插件投递的条目：点开跳插件视图（与 sessionFile 二选一） */
+  target?: { pluginId: string; viewId: string }
+  /** 插件条目的观感；完成卡不带（按 outcome 推导） */
+  tone?: 'info' | 'success' | 'warn' | 'error'
 }
 
 const outcomeIcon: Record<InboxItem['outcome'], string> = {
@@ -32,6 +36,29 @@ const outcomeColor: Record<InboxItem['outcome'], string> = {
   success: 'text-[var(--success-semantic)]',
   failed: 'text-[var(--danger-semantic)]',
   cancelled: 'text-[var(--text-secondary)]',
+}
+
+/** 插件条目按 tone 选观感；没有 tone 就沿用完成卡那套 */
+const toneIcon: Record<NonNullable<InboxItem['tone']>, string> = {
+  info: '•',
+  success: '✓',
+  warn: '!',
+  error: '✕',
+}
+
+const toneColor: Record<NonNullable<InboxItem['tone']>, string> = {
+  info: 'text-[var(--text-secondary)]',
+  success: 'text-[var(--success-semantic)]',
+  warn: 'text-[var(--warning-semantic)]',
+  error: 'text-[var(--danger-semantic)]',
+}
+
+function itemIcon(item: InboxItem): string {
+  return item.tone ? toneIcon[item.tone] : outcomeIcon[item.outcome]
+}
+
+function itemColor(item: InboxItem): string {
+  return item.tone ? toneColor[item.tone] : outcomeColor[item.outcome]
 }
 
 function sameInboxItems(previous: InboxItem[], next: InboxItem[]): boolean {
@@ -52,6 +79,7 @@ export function NotificationInbox() {
   const attention = useUIStore((s) => s.sessionAttention)
   const sessions = useUIStore((s) => s.sessions)
   const currentWorkspace = useUIStore((s) => s.currentWorkspace)
+  const setCenterView = useUIStore((s) => s.setCenterView)
   const waiting = listAttentionSessions(attention, 'needs-you')
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
   const filteredItems = filter === 'unread' ? items.filter((i) => i.unread) : items
@@ -128,6 +156,34 @@ export function NotificationInbox() {
     }
   }
 
+  /**
+   * 插件条目：切中央视图而不是切会话。
+   *
+   * 信箱与插件视图是两套东西（前者是「发生过什么」，后者是「现在怎么样」），
+   * 所以点开只负责把人送到插件页；定位到具体那条记录要靠插件自己的未读标记。
+   */
+  const openPluginView = async (item: InboxItem) => {
+    const target = item.target
+    if (!target) return
+    setActionError(null)
+    setPending(item.notificationId)
+    try {
+      setCenterView({ kind: 'plugin', pluginId: target.pluginId, viewId: target.viewId })
+      await ipcClient.invoke('notifications.markRead', { id: item.notificationId })
+      await load()
+      close()
+    } catch {
+      setActionError(t('common:notification.openFailed'))
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const openItem = async (item: InboxItem) => {
+    if (item.target) await openPluginView(item)
+    else await openSession(item.workspaceId, item.sessionId, item.sessionFile, item.notificationId)
+  }
+
   const toggleRead = async (item: InboxItem) => {
     setPending(item.notificationId)
     setActionError(null)
@@ -192,9 +248,9 @@ export function NotificationInbox() {
           <h3 className="workbench-group-heading">{t('common:notification.history')}<span>{filteredItems.length}</span></h3>
           {filteredItems.map((item) => (
             <div key={item.notificationId} className="notification-row" data-unread={item.unread || undefined}>
-              <button type="button" className="workbench-list-row min-w-0 flex-1" disabled={!item.sessionFile || pending !== null} title={!item.sessionFile ? t('common:notification.sessionGone') : undefined} onClick={() => void openSession(item.workspaceId, item.sessionId, item.sessionFile, item.notificationId)}>
+              <button type="button" className="workbench-list-row min-w-0 flex-1" disabled={(!item.sessionFile && !item.target) || pending !== null} title={!item.sessionFile && !item.target ? t('common:notification.sessionGone') : undefined} onClick={() => void openItem(item)}>
                 <span className={cn('workbench-row-title', item.unread && 'font-semibold')}>
-                  <span className={cn('mr-1.5 inline-block w-3 text-center', outcomeColor[item.outcome])}>{outcomeIcon[item.outcome]}</span>
+                  <span className={cn('mr-1.5 inline-block w-3 text-center', itemColor(item))}>{itemIcon(item)}</span>
                   {item.copy?.title || t('common:attention.done')}
                 </span>
                 {item.copy?.body && <span className="notification-preview">{item.copy.body}</span>}

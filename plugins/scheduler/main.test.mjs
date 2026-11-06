@@ -22,6 +22,8 @@ let dataDir
 let handle
 /** 系统通知记录 */
 let notified = []
+/** 投进宿主信箱的条目（ctx.ui.inbox） */
+let inboxed = []
 /** runAgentPrompt 收到的参数 */
 let promptCalls = []
 /** 每次执行的假答复；用例可替换（也可以返回 pending promise 模拟长任务） */
@@ -51,6 +53,11 @@ function fakeCtx(initialStorage) {
     },
     log: () => {},
     notify: (title, body) => notified.push({ title, body }),
+    ui: {
+      ask: async () => ({ cancelled: true, answers: [] }),
+      setComposerBar: () => {},
+      inbox: (item) => inboxed.push(item),
+    },
     runAgentPrompt: async (spec) => {
       promptCalls.push(spec)
       return reply(spec)
@@ -101,6 +108,7 @@ function runsFileLines() {
 beforeEach(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-test-'))
   notified = []
+  inboxed = []
   promptCalls = []
   settingValues = { notifyOnStart: false }
   stored = {}
@@ -559,9 +567,23 @@ describe('条件通知', () => {
       // 只发一条：静默监控「无变化」、彻底静默 policy=never
       expect(notified.map((item) => item.title)).toEqual(['定时任务：喝水提醒'])
       expect(notified[0].body).toContain('该喝水了')
+      // 信箱与系统通知同条件：只留喝水提醒那一条，并且带跳转目标
+      expect(inboxed.map((item) => item.title)).toEqual(['定时任务：喝水提醒'])
+      expect(inboxed[0].body).toContain('该喝水了')
+      expect(inboxed[0].tone).toBe('success')
+      expect(inboxed[0].target).toEqual({ pluginId: 'scheduler', viewId: 'main' })
     },
     30_000,
   )
+
+  it('手动执行不进信箱（用户就在跟前）', async () => {
+    reply = async () => ({ ok: true, text: '有变化\nSCHED:changed' })
+    const created = await createTask({ notifyPolicy: 'always' })
+    await invoke('runNow', { id: created.details.id })
+    await waitRuns(created.details.id)
+    expect(inboxed).toHaveLength(0)
+    expect(notified).toHaveLength(0)
+  })
 
   it('第二次执行带上次结论做基线，且旧基线在改 prompt 后失效', async () => {
     reply = async () => ({ ok: true, text: '基线内容 ABC\nSCHED:changed' })
