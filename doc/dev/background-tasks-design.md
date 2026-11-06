@@ -1028,3 +1028,53 @@ v8 报告把功能与文案问题都清零了，剩下两条都是**文件卫生
 `main.test.mjs` 新增 3 条（`log file hygiene`）：被拒绝的启动不留文件且不烧 id、
 `clearTasks` 扫掉孤儿（`bg-901.*`、`bg-902.ps1`）但不误伤有记录的任务、
 `activate` 清掉上一轮遗留。回滚到旧代码验证过：三条全失败。
+
+## 24. 代码审查后修复（批次 1）：三个静默错误 + 六条 P2
+
+审查报告见 `doc/dev/review-plugin-host-2026-11-06.md`。这一批只做「用户看不见、
+但确实错了」的局部修复，不动契约（托盘词表在 §25 单独处理）。
+
+### 24.1 P1-1 增量读丢字节
+
+`decode()` 在多字节字符被 chunk 边界切断时会退到最后一个换行，但 `nextOffset`
+仍按「读了多少字节」前进 —— 退回去的那一段既不在本次文本里，也再读不到。
+现在 `decode` 返回 `{ text, bytes }`，`chunkBytes` / `nextOffset` 一律按**实际消费**算；
+整块只有一行且末尾被切断时，摘掉尾部替换符让残缺字符下次重读（全块都是残字的
+极端情况仍全消费，否则调用方会卡在同一个 offset 上）。
+
+新增用例：把日志改写成固定宽度中文行，用 64B 切片保证边界落在字中间，一路读到底
+拼回来必须与原文逐字节相等；每步还断言「不含替换符」「offset 必须前进」。
+回滚旧代码验证过：同时触发替换符与丢字节两种失败。
+
+### 24.2 P1-2 lost 任务的回报语义自相矛盾
+
+`recover()` 把失联任务标成 `lost` 并写 `report:'pending'`，但**没有调用
+`scheduleReport()`**，probe 的补偿只处理 `status==='running'`（那时已被改成 lost）。
+于是面板一直挂着「待回报」、调度上永远不会来、重试按钮又只在 failed/skipped 时出现。
+改成 `report:'skipped'` + `reportNote:'宿主重启时丢失进程，需手动重新回报'`：
+语义诚实，且面板的「重新回报」入口自动出现（`lost` 还额外无条件给按钮）。
+
+### 24.3 P1-3 每次「停用→启用」泄漏一个订阅
+
+`buildContext` 里的 `settings.onChange` / `sessions.onRunEvent` 返回的解除函数
+被插件丢掉了。现在 `PluginInstance` 持有 `disposers[]`，`buildContext` 用 `track()`
+登记，`deactivatePlugin` 统一回收；`activatePlugin` 的失败分支也会回收（否则半死
+的实例把订阅留在宿主里）。顺带把 `deactivate()` 改成 `await`（原来是 `void`，
+开发期「停用→启用」会和异步收尾抢同一份磁盘状态）。
+
+### 24.4 P2 六条
+
+| 编号 | 修复 |
+|---|---|
+| P2-1 | 面板入口路径校验改 `path.relative`（`startsWith` 挡不住同前缀兄弟目录 `bg-evil`） |
+| P2-2 | 回报队列 key 走 `normSession`，原始路径存 `queue.sessionFile` 供投递使用 |
+| P2-3 | 投递失败写 `reportError`，不再覆盖 `task.error`（那是任务本身的失败原因） |
+| P2-4 | `describeStart` 的 120ms 窗口里记录被清掉时，回执如实说「已被清理」而不是谎称已启动 |
+| P2-5 | 面板错误横幅：恢复正常时若上一次是错误态，强制重绘（此前只走 updateMeta，红框永久挂着） |
+| P2-6 | `maxLogMb` 的设置文案改成事实（超限是**终止任务**，不是只截断日志） |
+
+### 24.5 测试
+
+`main.test.mjs` 新增 3 条（增量读、lost 语义、reportError），
+新建 `src/main/plugins/__tests__/plugin-host-entry.test.ts` 3 条（路径穿越，
+回滚验证过会失败）。插件 43 条 + 宿主插件层 8 条全过。

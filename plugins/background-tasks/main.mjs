@@ -2,7 +2,8 @@
  * 后台任务 — main 侧服务。
  *
  * 给会话一套「起长命令、干别的、跑完自己回来汇报」的能力。pi 内置的 bash 工具是
- * 同步等待的，长命令会把一轮对话卡死；这里把进程 detached 出去、输出直写日志文件，
+ * 同步等待的，长命令会把一轮对话卡死；这里把命令交给 shell 起在后台（刻意不 detached，
+ * Electron 主进程里 detached 子进程会「起了但从不退出、也没有输出」）、输出直写日志文件，
  * 任务结束时通过 ctx.sessions.send 把结果投回发起它的那个会话。
  *
  * 契约：
@@ -15,9 +16,9 @@
  * 三条设计红线（见 doc/dev/background-tasks-design.md）：
  *   1. 输出不经宿主内存：由 shell 把 stdout/stderr 分别重定向到两个文件，
  *      几百 MB 也压不垮 main 进程。分流是为了让「失败时看 stderr」不用翻整份日志。
- *   2. 任务表落盘：宿主重启后按 pid 探测接管，对不上的记 lost 并允许重新回报。
- *   3. 回报要克制：默认只报「超过阈值或失败」的任务，同会话 5 秒内合并，
- *      一条消息最多展开 3 个任务——否则模型连开十个任务会把对话淹掉。
+ *   2. 任务表落盘：宿主重启后按 pid 探测接管，对不上的记 lost 并允许手动重新回报。
+ *   3. 回报要克制：默认只报「超过阈值或失败」的任务，一条消息最多展开 3 个任务——
+ *      否则模型连开十个任务会把对话淹掉。投递走 steer（插话），不再做合并窗口。
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -242,14 +243,26 @@ function labelOf(command) {
   return first.length > 60 ? `${first.slice(0, 57)}…` : first || '未命名命令'
 }
 
+/**
+ * 解码一块字节，返回**实际消费了多少字节**。
+ *
+ * 多字节字符被截在 chunk 边界时会出替换符：退到最后一个换行，剩下的下次再读。
+ * 关键：调用方的 nextOffset 必须按「实际消费」前进而不是「读了多少」——否则被
+ * 退回去的那一段既不在本次文本里，也不会被下次读到，等于静默丢一整行。
+ */
 function decode(buffer) {
-  let text = buffer.toString('utf8')
-  // 多字节字符被截在 chunk 边界时会出替换符：退到最后一个换行，剩下的下次再读
-  if (text.includes('\uFFFD')) {
-    const cut = text.lastIndexOf('\n')
-    if (cut > 0) text = text.slice(0, cut + 1)
+  const text = buffer.toString('utf8')
+  if (!text.includes('\uFFFD')) return { text, bytes: buffer.length }
+  const cut = text.lastIndexOf('\n')
+  if (cut > 0) {
+    const kept = text.slice(0, cut + 1)
+    return { text: kept, bytes: Buffer.byteLength(kept, 'utf8') }
   }
-  return text
+  // 整块就一行、且末尾字符被切断：摘掉尾部的替换符，让残缺字符下次重读。
+  // 全块都是残字（极端）时只能全消费，否则调用方会卡在同一个 offset 上。
+  const kept = text.replace(/\uFFFD+$/, '')
+  const bytes = Buffer.byteLength(kept, 'utf8')
+  return bytes > 0 ? { text: kept, bytes } : { text, bytes: buffer.length }
 }
 
 function alive(pid) {
@@ -307,11 +320,14 @@ async function readLog(task, { offset, maxBytes, tailLines, stream }) {
     handle = await fsp.open(file, 'r')
     const buf = Buffer.alloc(end - start)
     const { bytesRead } = await handle.read(buf, 0, buf.length, start)
-    out.chunk = decode(buf.subarray(0, bytesRead))
-    out.chunkBytes = bytesRead
-    out.nextOffset = start + bytesRead
+    const decoded = decode(buf.subarray(0, bytesRead))
+    out.chunk = decoded.text
+    // 一律按「实际消费」的字节推进：decode 可能为了避开半个多字节字符而退回一段，
+    // 此时用 bytesRead 当前进量，那段就既不在本次文本里也再读不到（静默丢行）
+    out.chunkBytes = decoded.bytes
+    out.nextOffset = start + decoded.bytes
     out.hasMore = out.nextOffset < size
-    out.truncated = out.chunkBytes < end - start
+    out.truncated = decoded.bytes < end - start
     const want = Number(tailLines)
     if (fromEnd && want > 0) {
       const lines = out.chunk.split('\n')
@@ -833,10 +849,13 @@ function scheduleReport(task) {
 }
 
 function enqueueReport(task) {
-  const key = task.sessionFile
+  // 队列 key 与托盘/面板用同一套归一化（normSession）：工具侧与推送侧拿到同一会话的
+  // 不同写法（相对路径 vs 绝对路径）时，否则会拆成两个队列、发成两条消息，
+  // 而面板上只有一个会话。原始写法存在 queue.sessionFile 里，投递时仍用它。
+  const key = normSession(task.sessionFile) || task.sessionFile
   let queue = reportQueues.get(key)
   if (!queue) {
-    queue = { items: [], timer: null }
+    queue = { items: [], timer: null, sessionFile: task.sessionFile }
     reportQueues.set(key, queue)
   }
   // 同一任务只排一次：exit / close 两个回调都可能触发 scheduleReport
@@ -896,10 +915,10 @@ function markDeleted(ids) {
   dropQueuedReports(ids)
 }
 
-async function flushReports(sessionFile) {
-  const queue = reportQueues.get(sessionFile)
+async function flushReports(key) {
+  const queue = reportQueues.get(key)
   if (!queue) return
-  reportQueues.delete(sessionFile)
+  reportQueues.delete(key)
   const items = queue.items.splice(0)
   // 从「队列取走」到「真正投递」之间记录可能已被清理：先剔掉，别让 skipped 计数跟着虚高
   const alive = items.filter((t) => !deletedIds.has(t.id))
@@ -915,7 +934,9 @@ async function flushReports(sessionFile) {
       if (err) task.errTailText = err
     }
   }
-  await deliver(sessionFile, detailed, skipped)
+  // 队列 key 是归一化的，投递要用原始路径（大小写/分隔符原样），否则在区分大小写的
+  // 文件系统上会找不到会话
+  await deliver(queue.sessionFile || detailed[0].sessionFile, detailed, skipped)
 }
 
 function buildReport(items, skipped) {
@@ -985,13 +1006,16 @@ async function deliver(sessionFile, items, skipped) {
     for (const task of live) {
       task.report = 'queued'
       task.reportedAt = Date.now()
+      delete task.reportError
       delete task.tailText
     }
   } catch (error) {
     ctx.log('report delivery failed', error)
     for (const task of live) {
       task.report = 'failed'
-      task.error = error?.message || String(error)
+      // 单独一个字段：task.error 装的是**任务本身**为什么失败（超时说明、spawn 错误），
+      // 面板与 bg_list 都在读它。投递失败覆盖上去，用户就再也看不到任务的真实原因了。
+      task.reportError = error?.message || String(error)
       delete task.tailText
     }
   }
@@ -1009,7 +1033,12 @@ function recover() {
     // 宿主退出期间任务早就结束了：pid 不在，退出码永远拿不到，如实记 lost
     task.status = 'lost'
     task.endedAt = task.endedAt ?? now
-    task.report = 'pending'
+    // 不自动补报：重启瞬间可能有一批任务同时变 lost，一次性推给模型只是噪声，
+    // 而且日志尾巴早被截断，报出来的结果也没什么价值。但也不能写成 'pending'——
+    // 那表示「马上会来」，而实际上没有任何调度路径会送它（面板会一直挂着「待回报」）。
+    // 记成 skipped + 原因，面板据此给出「重新回报」入口，语义与事实一致。
+    task.report = 'skipped'
+    task.reportNote = '宿主重启时丢失进程，需手动重新回报'
   }
   save()
   // 超时定时器不落盘：接管来的任务按 startedAt 重算剩余时间，已过期的立刻到点
@@ -1103,7 +1132,15 @@ async function describeStart(task) {
   task.reportHold = true
   await new Promise((resolve) => setTimeout(resolve, 120))
   const fresh = taskById(task.id)
-  if (fresh && fresh.status !== 'running') {
+  if (!fresh) {
+    // 这 120ms 里用户把它删了/清空了：回执不能拿已删除的记录拼「已在后台启动」，
+    // 模型会据此以为任务还活着（而记录和日志都没了）。
+    return {
+      text: `${task.id}「${task.label}」的记录在启动回执返回前已被清理，任务可能仍在运行，可用 ps 查 pid ${task.pid}。`,
+      details: { id: task.id, label: task.label, status: 'unknown', pid: task.pid, cleared: true },
+    }
+  }
+  if (fresh.status !== 'running') {
     // 回执已经把终态完整交给调用方了：自动回报必须让位。
     // 否则文案写着「不会再单独回报」，几秒后又收到一条，等于自己打自己的脸。
     delete fresh.reportHold
@@ -1341,6 +1378,7 @@ const tools = {
         bytes: t.bytes ?? 0,
         errBytes: t.errBytes ?? 0,
         report: t.report,
+        reportError: t.reportError ?? null,
         cwd: t.cwd,
       }))
     const running = tasks.filter((t) => t.status === 'running').length
@@ -1387,6 +1425,8 @@ const methods = {
         rerunOf: t.rerunOf ?? null,
         report: t.report,
         reportNote: t.reportNote ?? null,
+        /** 投递问题（与任务本身的 error 分开：一个说「回报没送到」，一个说「任务怎么失败的」） */
+        reportError: t.reportError ?? null,
         error: t.error ?? null,
         logPath: t.logPath,
         errPath: t.errPath ?? null,
@@ -1548,8 +1588,9 @@ const methods = {
       const err = await tailOf(task, 'err')
       if (err) task.errTailText = err
     }
+    delete task.reportError
     await deliver(task.sessionFile, [task], 0)
-    return { ok: task.report === 'queued', report: task.report, error: task.error ?? null }
+    return { ok: task.report === 'queued', report: task.report, reportError: task.reportError ?? null }
   },
 }
 

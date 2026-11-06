@@ -677,3 +677,104 @@ describe("log file hygiene (v8 report)", () => {
     }
   }, 20_000)
 })
+
+describe("incremental read (review P1-1)", () => {
+  it("never skips bytes when a multi-byte character lands on the chunk boundary", async () => {
+    // decode() 遇到被切断的多字节字符会退到最后一个换行；若 nextOffset 仍按
+    // 「读了多少字节」前进，被退回去的那段既不在本次文本里、也再读不到——
+    // 一行内容就这样静默消失了。这里把日志改写成固定宽度的中文行，
+    // 用 64B 的切片保证边界正好落在某个字的中间，然后一路读到底拼回来比对。
+    const res = await start({ command: "echo seed", label: "编码边界" })
+    const task = await waitDone(res.details.id)
+    const line = "中文内容测试行"
+    const text = `${Array.from({ length: 10 }, () => line).join("\n")}\n`
+    fs.writeFileSync(task.logPath, text)
+
+    let offset = 0
+    let collected = ""
+    for (let i = 0; i < 100; i += 1) {
+      const chunk = await handle.invoke("readOutput", { id: task.id, offset, maxBytes: 64 })
+      // 返回的文本必须是合法 UTF-8 前缀：出现替换符说明把字切断了
+      expect(chunk.chunk).not.toContain("\uFFFD")
+      collected += chunk.chunk
+      if (!chunk.hasMore) break
+      // 每一步都必须真的前进，否则调用方会卡死在同一段
+      expect(chunk.nextOffset).toBeGreaterThan(offset)
+      offset = chunk.nextOffset
+    }
+    expect(collected).toBe(text)
+  }, 30_000)
+})
+
+describe("restart loses the process (review P1-2)", () => {
+  it("records lost as skipped-with-reason and offers a manual retry", async () => {
+    // 重启后 pid 不在：既不能写成 pending（没有任何调度会送它，面板会一直挂着
+    // 「待回报」），也不该自动补一报（重启瞬间一批任务同时 lost 只是噪声）。
+    await deactivate()
+    const logPath = path.join(dataDir, "logs", "bg-7.log")
+    fs.writeFileSync(logPath, "")
+    const recovered = await activate(
+      fakeCtx({
+        seq: 7,
+        tasks: [
+          {
+            id: "bg-7",
+            label: "失联任务",
+            command: "sleep 100",
+            status: "running",
+            // 不存在的 pid：alive() 必假
+            pid: 2_147_483_647,
+            startedAt: Date.now() - 5_000,
+            sessionFile: "s1.jsonl",
+            logPath,
+            errPath: path.join(dataDir, "logs", "bg-7.err"),
+          },
+        ],
+      }),
+    )
+    handle = recovered
+    try {
+      const listed = await handle.invoke("listTasks", {})
+      const row = listed.tasks.find((t) => t.id === "bg-7")
+      expect(row.status).toBe("lost")
+      expect(row.report).toBe("skipped")
+      expect(row.reportNote).toContain("重新回报")
+
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(sent).toHaveLength(0)
+
+      // 面板的「重新回报」走的就是这个方法
+      const retried = await handle.invoke("retryReport", { id: "bg-7" })
+      expect(retried.ok).toBe(true)
+      expect(sent).toHaveLength(1)
+      expect(sent[0].content).toContain("bg-7")
+    } finally {
+      await deactivate()
+    }
+  }, 30_000)
+})
+
+describe("report delivery failure (review P2-3)", () => {
+  it("keeps the task error intact and records the delivery problem separately", async () => {
+    await deactivate()
+    const failing = fakeCtx()
+    failing.sessions.send = async () => {
+      throw new Error("worker gone")
+    }
+    handle = await activate(failing)
+    try {
+      const res = await start({ command: "echo boom; exit 3", label: "投递失败" })
+      await waitDone(res.details.id)
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      const listed = await handle.invoke("listTasks", {})
+      const row = listed.tasks.find((t) => t.id === res.details.id)
+      expect(row.report).toBe("failed")
+      expect(row.reportError).toContain("worker gone")
+      // task.error 是「任务为什么失败」，不能被投递问题覆盖
+      expect(row.error).toBeNull()
+      expect(row.status).toBe("failed")
+    } finally {
+      await deactivate()
+    }
+  }, 30_000)
+})

@@ -117,7 +117,7 @@ export function registerPluginHandlers(): void {
     for (const id of result.installed) {
       // 覆盖升级时旧实例还挂在 active 里，activatePlugin 会直接短路返回 → 跑的还是
       // 旧代码。先退役再拉起，配合入口 mtime 的 cache buster，升级即生效。
-      deactivatePlugin(id)
+      await deactivatePlugin(id)
       // 新装的插件默认启用（覆盖升级保留原有启停状态）
       if (discoverPlugins().find((p) => p.manifest?.id === id)?.enabled === false) {
         await applyPluginEnabled(id, true)
@@ -132,7 +132,7 @@ export function registerPluginHandlers(): void {
   registerHandler('ipc:plugins.uninstall', async (req) => {
     const pluginId = String(req?.pluginId || '')
     if (!pluginId) return { ok: false, error: 'plugin_id_required' }
-    deactivatePlugin(pluginId)
+    await deactivatePlugin(pluginId)
     const removed = removeUserPlugin(pluginId)
     if (!removed.ok) {
       // 删除失败时把插件重新拉起来，别让用户点一下卸载反而把插件弄停
