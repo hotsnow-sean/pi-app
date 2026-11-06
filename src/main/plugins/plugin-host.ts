@@ -5,7 +5,7 @@ import { Notification, app } from 'electron'
 import { findPlugin, setPluginEnabled } from './plugin-manager'
 import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import { askInHost, cancelPluginUIRequests } from './plugin-ui'
-import { publishPluginComposerBar } from './plugin-composer-bar'
+import { clearPluginComposerBars, publishPluginComposerBar } from './plugin-composer-bar'
 import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
 import { cancelPluginToolCallsFor, pluginToolDescriptors } from './plugin-tools'
 import { workerManager } from '../worker-manager'
@@ -270,6 +270,8 @@ export function deactivatePlugin(pluginId: string): void {
   // 停用即收回它伸出去的手：挂着的对话框与会话里的工具调用都该结束，别把用户卡在弹窗里
   cancelPluginUIRequests(pluginId)
   cancelPluginToolCallsFor(pluginId)
+  // 它推着的托盘也一样：插件都没了，输入框上方不该留一条没人再更新的摘要
+  clearPluginComposerBars(pluginId)
   try {
     void instance.deactivate?.()
   } catch (error) {

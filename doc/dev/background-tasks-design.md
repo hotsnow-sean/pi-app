@@ -807,3 +807,38 @@ keepRunning 挡下的归入 `skippedRunning`，文案分开说：
 
 `main.test.mjs` 31 → 33 条：activate 补推托盘（用复用 storage 模拟重启）、
 ids 清理的 missing/skippedRunning 区分。fakeCtx 的 storage 支持复用。
+
+## 19. v0.6.1 补丁：托盘启动兜底（激活推送早于 renderer 就绪）
+
+### 19.1 现象与根因
+
+重启后进入有残留任务的会话：右栏面板正常、托盘消失（v0.6.1 §18.2 的补推没生效）。
+
+根因是**时序竞态**：`activateEnabledPlugins()` 与 `createWindow()` 在 app whenReady
+里并行，插件 `activate()` 的托盘补推走 `publishPluginComposerBar` →
+`webContents.send`——此时 renderer 的页面多半还没加载完、`ipc:events` 监听器
+没挂上，推送直接丢失。Electron 的 send 没有排队语义，早到的消息就是没了。
+
+之所以表现为「面板正常、托盘消失」：面板是**拉取式**（打开时 invoke
+`listTasks`），托盘是**纯推送面**，丢了就再没有自然恢复的机会。
+
+### 19.2 修法：main 状态表 + renderer 启动拉取
+
+托盘的当前状态本来 main 侧就全知（每次推送都经过它），留一份即可兜底：
+
+- `plugin-composer-bar.ts` 维护 `currentBars`（pluginId → sessionFile → bar，
+  存归一化后的值），publish 入表 / null 出表；新增
+  `listPluginComposerBars()`（拉取全量）与 `clearPluginComposerBars(pluginId)`
+  （整表收回并按会话广播 null）；
+- 新 IPC `ipc:plugins.composerBars.list`；
+- renderer 启动（app.tsx 事件订阅 effect）拉一次，把每条构造成 `plugin_widget`
+  事件走 `processEvent` 原路重放——路由、按会话落库、可见会话投影全部复用现有
+  管道，幂等多拉无害（窗口 reload 也顺带覆盖）；
+- 顺手修 `deactivatePlugin`：停用/卸载插件时 `clearPluginComposerBars`，
+  此前托盘会残留一条没人再更新的摘要。
+
+### 19.3 测试
+
+`src/main/plugins/__tests__/plugin-composer-bar.test.ts` 新增 5 条：推送入表、
+null 出表（仍广播）、同插件跨会话隔离、整表收回广播 null、空 sessionFile 忽略。
+stores + composer 回归 41 文件 237 条全过。

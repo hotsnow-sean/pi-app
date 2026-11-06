@@ -16,6 +16,7 @@ import { TopBar } from '@renderer/components/app/top-bar'
 import { ImmersiveChrome } from '@renderer/components/app/immersive-chrome'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { onAppEvent, onWorkerExit, onNotificationOpenSession, ipcClient } from '@renderer/lib/ipc-client'
+import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
 import { handleNotificationOpenSession } from '@renderer/lib/notification-open-session'
 
 import { activateWorkspace } from '@renderer/lib/activate-workspace'
@@ -298,6 +299,33 @@ export default function App() {
       }
       useUIStore.getState().processEvent(event)
     })
+    // 插件托盘启动兜底：插件激活可能早于本窗口挂上事件监听（上面这行还没生效），
+    // 那段时间的 plugin_widget 推送已经丢了——表现为「重启后面板里有列表、
+    // 托盘消失」。main 侧存着所有托盘的当前状态，这里拉一次按原事件重放；
+    // processEvent 会按 sessionFile 路由到各会话的 state，幂等多拉无害。
+    let replaySeq = 0
+    void ipcClient
+      .invoke('plugins.composerBars.list')
+      .then((res) => {
+        const bars = (res?.bars ?? []) as Array<{
+          pluginId: string
+          sessionFile: string
+          bar: PluginComposerBarState
+        }>
+        for (const { pluginId, sessionFile, bar } of bars) {
+          if (!pluginId || !sessionFile || !bar) continue
+          useUIStore.getState().processEvent({
+            type: 'plugin_widget',
+            seq: ++replaySeq,
+            workspaceId: '',
+            sessionFile,
+            timestamp: Date.now(),
+            pluginId,
+            bar,
+          })
+        }
+      })
+      .catch(() => {})
     void import('@renderer/lib/session-worker-sync').then(({ fetchWorkerLiveSnapshot }) => {
       fetchWorkerLiveSnapshot()
         .then((snap) => useUIStore.getState().setWorkerLiveSnapshot(snap))

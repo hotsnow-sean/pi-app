@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, shell } from 'electron'
 import { registerHandler, sendEvent } from '../ipc/registry'
 import { discoverPlugins, installPluginFromDir, removeUserPlugin } from './plugin-manager'
 import { activateEnabledPlugins, activatePlugin, applyPluginEnabled, deactivatePlugin, invokePlugin } from './plugin-host'
+import { listPluginComposerBars } from './plugin-composer-bar'
 import {
   getPluginSettings,
   purgePluginData,
@@ -168,6 +169,14 @@ export function registerPluginHandlers(): void {
     const pluginId = String(req?.pluginId || '')
     if (!pluginId) return { ok: false, error: 'plugin_id_required' }
     return resetPluginSettings(pluginId)
+  })
+
+  /**
+   * 托盘启动兜底：插件激活可能早于本窗口挂上事件监听，那段时间的推送已经丢了。
+   * main 侧存着所有托盘的当前状态，renderer 启动拉一次补齐（幂等，多拉无害）。
+   */
+  registerHandler('ipc:plugins.composerBars.list', async () => {
+    return { ok: true, bars: listPluginComposerBars() }
   })
 
   registerHandler('ipc:plugin.invoke', async (req) => {
