@@ -24,6 +24,9 @@ const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : 
 const imp = (name) => import(pathToFileURL(joinPath(import.meta.dirname, `${name}.mjs`)).href + Q)
 const { rt } = await imp('runtime')
 
+/** 声明过的 shell 取值：schema 里的 enum 必须与它一致（守门在 main.test.mjs） */
+const SHELLS = ['auto', 'bash', 'cmd', 'powershell']
+
 /** Windows 上 Git Bash 的常见落点：PATH 里通常只有 git.exe，bash.exe 得自己找 */
 const WIN_BASH_CANDIDATES = [
   'C:\\Program Files\\Git\\bin\\bash.exe',
@@ -107,8 +110,18 @@ function bashQuote(p) {
  */
 export function buildSpawnSpec({ command, logPath, errPath, pidPath, requestedShell, id }) {
   const want = String(requestedShell || 'auto').toLowerCase()
+  // shell 参数是模型给的：schema 只是建议，写个别的值进来不能让它在两个平台
+  // 各自静默落到某个默认 shell 上——那正是 assertCmdCompatible 要防的假成功
+  if (!SHELLS.includes(want)) {
+    throw new Error(`不认识的 shell：${requestedShell}（可选 ${SHELLS.join(' / ')}）`)
+  }
 
   if (process.platform !== 'win32') {
+    // cmd / powershell 是 Windows 专属：在 POSIX 上悄悄跑 /bin/sh，「指定了 shell」
+    // 这件事就成了假的——调用方会拿 sh 的结果当成 cmd 的结果
+    if (want === 'cmd' || want === 'powershell') {
+      throw new Error(`shell:'${want}' 只有 Windows 支持。当前是 ${process.platform}，用默认的 bash（shell:'auto'）即可。`)
+    }
     const file = want === 'bash' ? findBash() : '/bin/sh'
     return {
       kind: want === 'bash' ? 'bash' : 'sh',
@@ -122,7 +135,7 @@ export function buildSpawnSpec({ command, logPath, errPath, pidPath, requestedSh
     }
   }
 
-  if (want === 'powershell' || want === 'pwsh') {
+  if (want === 'powershell') {
     // 脚本文件 + 由 cmd 重定向：PowerShell 自己 `*>` 到文件默认 UTF-16，日志会变乱码
     const scriptPath = path.join(rt.scriptDir, `${id}.ps1`)
     fs.writeFileSync(

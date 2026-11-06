@@ -145,14 +145,19 @@ export const methods = {
     const wantedIds = Array.isArray(ids) ? ids.map(String) : ids ? [String(ids)] : []
     let skippedRunning = 0
     const victims = rt.state.tasks.filter((t) => {
+      // 「本来会被选中」先算一遍，再让 keepRunning 决定跳不跳：分开写的话，
+      // 不传 status 时运行中任务不满足 wanted.includes，跳过了却不计数，
+      // 回执会说「没有已结束的任务可清理」——而实际是两个任务在跑
+      const selected =
+        wantedIds.length > 0 ? wantedIds.includes(t.id) : wanted.length === 0 || wanted.includes(t.status)
+      if (!selected) return false
       // keepRunning 也约束 ids 路径：点名清理不是强杀通行证，
       // 默认跳过运行中的（误传一个 id 不该静默终止长任务），keepRunning:false 才停+删
       if (keep && t.status === 'running') {
-        if (wantedIds.length > 0 ? wantedIds.includes(t.id) : wanted.includes('running')) skippedRunning++
+        skippedRunning++
         return false
       }
-      if (wantedIds.length > 0) return wantedIds.includes(t.id)
-      return wanted.length === 0 || wanted.includes(t.status)
+      return true
     })
     // 按 id 清理时静默跳过不存在的 id 而不是整体报错：脚本场景常是「尽力清」
     if (wantedIds.length > 0 && victims.length === 0 && skippedRunning === 0) {

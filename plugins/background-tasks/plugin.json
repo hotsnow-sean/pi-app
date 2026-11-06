@@ -51,7 +51,7 @@
               "cmd",
               "powershell"
             ],
-            "description": "Which shell interprets the command. Default 'auto' = bash if available (recommended: the bash tool also runs bash). Use 'cmd'/'powershell' only for native syntax — bash syntax under cmd is rejected instead of silently mangled."
+            "description": "Which shell interprets the command. Default 'auto' = bash if available (recommended: the bash tool also runs bash). Use 'cmd'/'powershell' only for native syntax — bash syntax under cmd is rejected instead of silently mangled. Both are Windows-only: asking for them on macOS/Linux is an error, not a silent fallback."
           },
           "timeoutSeconds": {
             "type": "number",
@@ -70,7 +70,7 @@
     {
       "name": "bg_output",
       "label": "读取后台任务输出",
-      "description": "Read a background task's output. Call it with only an id to get the tail; pass nextOffset from a previous call to read only what is new. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically. If you need to give a task a moment to produce output, pass waitMs instead of calling bash sleep.",
+      "description": "Read a background task's output. Call it with only an id to get the tail; to read only what is new, pass offset — the nextOffset a previous reply gave you. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically. If you need to give a task a moment to produce output, pass waitMs instead of calling bash sleep.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -133,11 +133,11 @@
           },
           "force": {
             "type": "boolean",
-            "description": "Kill immediately instead of asking the process to exit first."
+            "description": "On macOS/Linux, kill with SIGKILL instead of SIGTERM. On Windows this changes nothing: stopping a background task is never a graceful shutdown there, the whole process tree is killed outright."
           },
           "waitMs": {
             "type": "number",
-            "description": "Wait up to this long (max 10000ms) for the process to actually exit, so the reply carries the final status."
+            "description": "Wait up to this long (max 10000ms) for the process to actually exit, so the reply carries the final status. Default 1000 — pass 0 to return as soon as the signal is sent."
           }
         },
         "required": [

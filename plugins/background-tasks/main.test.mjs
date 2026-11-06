@@ -149,10 +149,24 @@ describe('shell contract', () => {
   }, 60_000)
 
   it('rejects bash syntax instead of silently mangling it under cmd', async () => {
+    if (process.platform !== 'win32') {
+      // POSIX 上 cmd/powershell 直接被拒（没有「静默落到 /bin/sh」这回事了）
+      const res = await start({ command: 'echo $(date)', shell: 'cmd' })
+      expect(res.isError).toBe(true)
+      expect(res.text).toContain('只有 Windows 支持')
+      return
+    }
     const res = await start({ command: 'echo $(date)', shell: 'cmd' })
     expect(res.isError).toBe(true)
     expect(res.text).toContain('bash 语法')
     expect(res.text).toContain("shell:'bash'")
+  }, 20_000)
+
+  it('rejects a shell value that is not declared in the schema', async () => {
+    // schema 只是建议：模型写个 pwsh/zsh 进来，过去会静默落到平台默认 shell 上
+    const res = await start({ command: 'echo hi', shell: 'pwsh' })
+    expect(res.isError).toBe(true)
+    expect(res.text).toContain('不认识的 shell')
   }, 20_000)
 })
 
@@ -360,6 +374,20 @@ describe('rerun and clear', () => {
     const listed = await handle.invoke('listTasks', {})
     expect(listed.tasks.some((t) => t.id === running.details.id)).toBe(true)
     expect(listed.tasks.some((t) => t.id === finished.details.id)).toBe(false)
+
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } })
+  }, 60_000)
+
+  it('reports running tasks as skipped even without a status filter', async () => {
+    const running = await start({ command: 'sleep 20', label: '只有运行中' })
+    // 不传 status：运行中的任务本来就「会被选中但被 keepRunning 挡下」，
+    // 这必须算进 skippedRunning。否则回执说「没有已结束的任务可清理」，
+    // 而实际是一个任务正在跑——排障时这句话会把人带偏
+    const res = await handle.invoke('tool.execute', { name: 'bg_clear', args: {}, sessionFile: 's1.jsonl' })
+    expect(res.details.cleared).toBe(0)
+    expect(res.details.skippedRunning).toBe(1)
+    expect(res.text).toContain('1 个运行中任务已跳过')
+    expect(res.text).not.toContain('没有已结束的任务可清理')
 
     await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } })
   }, 60_000)
