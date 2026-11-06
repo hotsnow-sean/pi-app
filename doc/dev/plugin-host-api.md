@@ -9,12 +9,32 @@ project 菜单等留在 `feat/plugin-host`，不在 core 上。（session bar �
 plugins/<id>/
   plugin.json      manifest（id/name/version/main + views[] + panels[] + sessionBars[] + tools[] + settings[]）
   main.mjs         main 侧：export async function activate(ctx) → { invoke(method, params) }
+  lib/*.mjs        （可选）main 侧拆分模块，由 main.mjs 动态加载
   ui/index.html    （可选）中央视图 / 右栏面板，iframe 沙箱 + postMessage
   ui/session-bar.html （可选）对话区顶部的会话条
 ```
 
 `main.mjs` 是被 `import()` 进 **Electron main 进程**的普通 ESM 模块——`node:fs`、`node:child_process`
 都能用。也正因为如此：抛出去的异常会直接砸在主进程里，所有异步入口必须自己 try/catch。
+
+### 1.1 多文件插件与热重载（lib/*.mjs 的规矩）
+
+宿主的热重载（停用 → 启用，不必重启应用）按**插件目录最大 mtime** 计算版本号，编进入口
+URL 的 `?v=`。但 Node 解析静态 import 的相对路径时会**丢掉 query**——如果 lib 模块用
+静态 `import './x.mjs'` 互相引用，入口换新了、它们命中的还是旧缓存，新旧两代模块
+同进程并存（比完全旧更难查）。
+
+所以多文件插件必须遵守：
+
+- 插件内模块引用**一律走带 `?v=` 的动态导入**：入口从自己的 `import.meta.url` 摘出
+  版本参数往下传，lib 收到后继续传给自己的依赖（链条参考 `plugins/background-tasks/main.mjs`）；
+- 相对解析不要用 `new URL(relative, base)`：测试环境（jsdom）会给 URL 构造器打补丁，
+  用 `import.meta.dirname` + `pathToFileURL` 拼；
+- 跨模块共享的可变状态集中在一个 runtime 模块里（background-tasks 的 `lib/runtime.mjs`），
+  只有一个模块用的状态留在各自模块闭包里，随模块的 `dispose*()` 回收。
+
+守门：`scripts/tests/plugin-typing.test.mjs` 检查插件模块里不得出现指向插件内文件的
+静态 import、每个 lib 文件必须开 `// @ts-check` 且被 `plugins/tsconfig.json` 覆盖。
 
 ## 2. ctx
 
@@ -31,7 +51,8 @@ plugins/<id>/
 let ctx
 ```
 
-`npm run typecheck:plugins` 会检查所有 `plugins/*/main.mjs`（`npm run typecheck` 已含它）。
+`npm run typecheck:plugins` 会检查所有 `plugins/*/main.mjs` 与 `plugins/*/lib/*.mjs`
+（`npm run typecheck` 已含它）。
 
 | 成员 | 说明 |
 | --- | --- |

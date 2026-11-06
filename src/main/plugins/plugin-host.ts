@@ -259,6 +259,43 @@ function buildContext(pluginId: string, disposers: Array<() => void>): PluginCon
   }
 }
 
+/**
+ * 插件目录里所有文件的最新 mtime。
+ *
+ * Node 的 ESM 缓存以 URL 为键，热重载靠把版本号编进 import query 实现。版本必须
+ * 取**整个插件目录**的最大 mtime 而不只是入口文件：插件的 main 会把相对导入解析成
+ * 不带 query 的子模块 URL，只按入口 bust 时，「改了 lib、没改 main」的热更会拿到
+ * 旧子模块——新旧两代模块同进程并存，是比完全旧更难查的错。插件侧的约定是入口
+ * 把自己的 `?v=` 透传给每个动态导入（见 background-tasks 的 main.mjs 顶部注释），
+ * 这里给入口一个目录级版本，透传下去就等于整个目录都被 bust 了。
+ */
+function pluginDirVersion(dir: string): number {
+  let latest = 0
+  const walk = (current: string): void => {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const item of entries) {
+      if (item.name === 'node_modules' || item.name === '.git') continue
+      const full = path.join(current, item.name)
+      if (item.isDirectory()) {
+        walk(full)
+        continue
+      }
+      try {
+        latest = Math.max(latest, fs.statSync(full).mtimeMs)
+      } catch {
+        /* 刚好被删掉的文件不参与定版 */
+      }
+    }
+  }
+  walk(dir)
+  return latest
+}
+
 export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; error?: string }> {
   if (active.has(pluginId)) return { ok: true }
   const found = findPlugin(pluginId)
@@ -273,11 +310,9 @@ export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; e
   }
   const disposers: Array<() => void> = []
   try {
-    // Node 的 ESM 缓存以 URL 为键：把入口文件的 mtime 编进 query，插件改动后
-    // 「停用 → 启用」就能拿到新模块，不必重启应用。
-    // 局限：只有入口文件被 bust，相对导入的子模块仍命中缓存——需要热重载的逻辑
-    // 请放在入口里；改了子模块仍需重启应用。
-    const version = fs.statSync(entryPath).mtimeMs
+    // 版本取目录最大 mtime（见 pluginDirVersion），入口把自己的 ?v= 透传给
+    // 子模块后，「停用 → 启用」就能让整个插件目录都拿到新模块，不必重启应用。
+    const version = pluginDirVersion(found.dir)
     const mod = (await dynamicImport(
       `file://${entryPath.split(path.sep).join('/')}?v=${version}`,
     )) as PluginModule
