@@ -872,3 +872,51 @@ stores + composer 回归 41 文件 237 条全过。
 - `scripts/tests/apply-app-event-budget.test.mjs` 与 `fmsm-prd-gates.test.mjs` 的
   行数预算有 off-by-one：末尾换行被算成多一行，`apply-app-event.ts` 正好 120 行
   却被判 121。两处都改成先去掉末尾换行再计数。
+
+## 20. v0.6.2：清空后面板不刷新（哨兵值撞车）
+
+### 20.1 现象
+
+点右栏面板「清空已结束」：托盘立刻消失（main 侧状态对），但面板还挂着旧列表，
+必须切走再切回来（重载 iframe）才刷。只剩运行中任务时点清空倒是正常。
+
+### 20.2 根因：空串既是「强制重绘」又是「空列表签名」
+
+`ui/app.js` 的 `tick()` 用签名对比避免整表重建：
+
+```js
+const signature = visible.map(t => `${t.id}:${t.status}:${t.report}`).join(,)
+if (signature !== lastSignature) { lastSignature = signature; rebuild() } else updateMeta()
+```
+
+而各处「动作之后强制下一拍重绘」都是 `lastSignature = `。列表清空后
+`signature` 恰好也是 `` —— 两个 `` 相等，`tick()` 认为「没变化」，
+`updateMeta()` 在旧 DOM 上跑一遍，列表就冻在那儿。`remove` 删掉最后一条时
+同理（只是没人注意到）。
+
+只剩运行中任务时不触发：签名非空，自然对不上。
+
+### 20.3 修法
+
+- 哨兵换成 `null`：`` 是「空列表」的**合法签名**，只有 `null` 才表示
+  「未知，必须重绘」；`rebuild()` 渲染空态时仍写 ``（它确实对应空签名）。
+- 清空按钮改成**本地先摘再重绘**：`clearTasks` 成功后从 `state.tasks` 摘掉这批 id、
+  清掉它们各自的输出缓存与流选择、关掉已展开项，`rebuild()` 立即生效，再 `tick()`
+  与 main 对齐——不等 1.5s 轮询，也不受 `busy` 抢占影响。
+- 顺手把 `state.outputs.clear()` / `state.streams.clear()`（一刀清掉所有任务的
+  输出缓存，运行中任务的滚动手感会丢）收窄成只清被清掉的那几条。
+
+### 20.4 顺手补上 UI 侧测试
+
+此前插件测试只覆盖 `main.mjs`（真实子进程行为），UI 一次没测——这类
+「动作后界面不刷」的问题只能靠人肉点。新增
+`plugins/background-tasks/ui/app.test.mjs`（3 条）：jsdom 起假宿主，拦
+`plugin-invoke` 按真实 main 语义回包，**跑真实的 ui/app.js**：
+
+- 清空已结束 → 列表立刻空、`clearTasks` 收到全部 id、空态文案出现
+- 清空已结束 → 运行中的留着、按钮随之消失
+- 清空只清当前会话，别的会话记录不动
+
+用例里关掉了 1.5s 轮询（`setInterval` 换成空实现）：要证明的就是「动作之后
+立刻刷」，靠轮询兜住的刷新正是要杜绝的现象。回滚到旧代码验证过：第 1、3 条
+用例超时失败，第 2 条（清空后还剩运行中任务）通过——与现象完全一致。

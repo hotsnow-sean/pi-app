@@ -20,7 +20,7 @@ window.addEventListener('message', (event) => {
     if (sf !== state.sessionFile) {
       state.sessionFile = sf
       state.open = null
-      lastSignature = ''
+      lastSignature = null
       rebuild()
     }
     return
@@ -89,7 +89,9 @@ const state = {
   /** 待滚动到可见处的任务 id（本轮重建之后执行一次） */
   pendingScroll: null,
 }
-let lastSignature = ''
+// 已渲染列表的签名。'' 是「空列表」的合法签名，所以「未知/需要重绘」只能用 null——
+// 拿空串当强制标记会和清空后的空签名撞车，tick() 判定无变化就不重绘了。
+let lastSignature = null
 let lastError = ''
 let busy = false
 
@@ -329,7 +331,7 @@ async function tick() {
       if (visibleTasks().some((t) => t.id === focus.id)) {
         state.open = focus.id
         if (!state.streams.has(focus.id)) state.streams.set(focus.id, 'out')
-        lastSignature = ''
+        lastSignature = null
         state.pendingScroll = focus.id
       }
     }
@@ -394,7 +396,7 @@ document.addEventListener('click', async (event) => {
       state.outputs.delete(`${id}:out`)
       state.outputs.delete(`${id}:err`)
       state.streams.delete(id)
-      lastSignature = ''
+      lastSignature = null
       await tick()
       return
     }
@@ -402,7 +404,7 @@ document.addEventListener('click', async (event) => {
       try {
         const res = await api('rerunTask', { id })
         state.open = res.id
-        lastSignature = ''
+        lastSignature = null
         await tick()
         await pullOutput(res.id)
       } catch (error) {
@@ -420,9 +422,21 @@ document.addEventListener('click', async (event) => {
       } catch (error) {
         window.alert(String(error?.message || error))
       }
-      state.outputs.clear()
-      state.streams.clear()
-      lastSignature = ''
+      // 本地先摘掉再重绘，不等下一拍轮询：清空后可见列表恰好是空签名，光靠
+      // 「把 lastSignature 置成标记值」很容易和空签名撞车（tick 判定无变化不重绘），
+      // 表现就是「托盘立刻没了、面板还挂着旧列表，切走再切回来才刷」。
+      const gone = new Set(ids)
+      if (gone.size) {
+        state.tasks = state.tasks.filter((t) => !gone.has(t.id))
+        for (const id of gone) {
+          state.outputs.delete(`${id}:out`)
+          state.outputs.delete(`${id}:err`)
+          state.streams.delete(id)
+        }
+        if (state.open && gone.has(state.open)) state.open = null
+      }
+      lastSignature = null
+      rebuild()
       await tick()
       return
     }
@@ -451,7 +465,7 @@ document.addEventListener('click', async (event) => {
 })
 
 // 页面可见时才轮询：切到别的视图等于没人看，白白占 CPU
-let timer = setInterval(() => {
+const timer = setInterval(() => {
   if (document.visibilityState === 'visible') void tick()
 }, 1500)
 document.addEventListener('visibilitychange', () => {
