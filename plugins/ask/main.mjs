@@ -1,3 +1,5 @@
+// @ts-check
+/// <reference path="../plugin-sdk.d.ts" />
 /**
  * 提问台 — main 侧服务。
  *
@@ -19,7 +21,8 @@ const MAX_RECORDS_HARD = 500
 
 const SETTING_DEFAULTS = { timeoutSec: 600, recordHistory: true, historyLimit: 50 }
 
-let ctx = null
+/** @type {import('../plugin-sdk').PluginContext} */
+let ctx
 let settings = { ...SETTING_DEFAULTS }
 let state = { records: [] }
 

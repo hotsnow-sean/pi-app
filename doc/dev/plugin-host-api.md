@@ -18,9 +18,24 @@ plugins/<id>/
 
 ## 2. ctx
 
+**权威声明在 `packages/shared/plugin-context.ts`**（宿主的 `buildContext()` 标注同一个类型，
+少成员、多成员都编译不过）。下面这张表必须与它逐项一致——有契约测试守着
+（`scripts/tests/plugin-typing.test.mjs`）。
+
+插件里拿类型的方式（`main.mjs` 是无类型 ESM，靠 JSDoc）：
+
+```js
+// @ts-check                                          ← 逐文件开关，不加就只补全不报错
+/// <reference path="../plugin-sdk.d.ts" />
+/** @type {import('../plugin-sdk').PluginContext} */
+let ctx
+```
+
+`npm run typecheck:plugins` 会检查所有 `plugins/*/main.mjs`（`npm run typecheck` 已含它）。
+
 | 成员 | 说明 |
 | --- | --- |
-| `ctx.pluginId` | manifest 里的 id |
+| `ctx.pluginId` | manifest 里的 id。不要自己写死字符串常量 |
 | `ctx.storage.get() / set(obj)` | 按插件隔离的 JSON 存储（`plugin-data/<id>/data.json`）。只放小状态 |
 | `ctx.dataDir` | 插件的私有可写目录（`plugin-data/<id>`，已创建）。日志、缓存这类大文件放这里 |
 | `ctx.settings.get()` | manifest `settings[]` 的只读快照（值由宿主设置页写入） |
@@ -67,11 +82,16 @@ await ctx.sessions.send({
 
 ```ts
 const off = ctx.sessions.onRunEvent(({ sessionFile, phase, cwd }) => {
-  // phase: started / running / idle / failed / cancelled
+  // phase: started / running / idle / failed / cancelled / state
+  //        （`state` 表示只同步了状态，不是一轮的开始或结束）
 })
 // 插件停用/重载时必须调用，否则回调悬空
 off()
 ```
+
+`phase` 的词表直接取宿主的 `RunEvent['phase']`（`PluginSessionRunPhase`），**别在插件里
+另造一套**——宿主只发这六个值，多写一个永远是死分支。缺失 phase 的畸形事件宿主不再派发
+（以前会给空字符串，让订阅者把「未知」当成一个状态存起来）。
 
 用途是决定投递语义（会话忙时排队而不是插话），**不是**判断「要不要投递」——`send` 自己处理忙闲。
 注意重载后旧订阅会失效，别缓存 `off` 到磁盘。
@@ -86,6 +106,10 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 ```
 
 - `sessionFile` / `cwd` 是**发起调用的会话**透传下来的（worker 带上来的，插件在 main 侧本来拿不到）。
+  形状见 `PluginToolExecuteParams`（`import('../plugin-sdk').PluginToolExecuteParams`）。
+- `args` 里**只有 manifest `parameters` 声明过的键**。schema 没写的参数模型看不到，handler 里
+  读到的永远是 `undefined`——本仓库踩过这个坑（一个可选参数漏进 schema，调用方传了也没用）。
+  **改 handler 前先回头看 schema**，这是唯一能让参数真的到达的入口。
 - 单次调用超时 20 分钟；用户 Esc 会 abort，`signal` 同步触发。
 - 工具名全局唯一：与内置工具或其它插件重名会被跳过（记日志，不覆盖）。
 - 插件工具**不受**内置工具白名单约束，权限等同 bash。
@@ -175,3 +199,7 @@ ctx.ui.setComposerBar(sessionFile, {
 - `plugin-context` 的 `sessionFile` 来自 renderer（`historySessionFile`），工具体收到的
   `sessionFile` 来自 worker（`session.sessionFile`）。两者通常是同一绝对路径，但不保证逐字相同——
   插件应做归一化（大小写/分隔符/尾斜杠），必要时用 basename 兜底。
+- **类型检查只保证形状，不保证 null 安全**：插件项目的 tsconfig 没开 `strictNullChecks`
+  （无类型 JS 全开代价太大），所以 `ctx.foo.bar` 里 `foo` 可能是 `undefined` 这件事
+  TS 不会拦。联合类型（如 `runAgentPrompt` 的返回值）在该模式下判别收窄也不生效，
+  用 `'error' in result` 这类写法代替 `if (result.ok)` 分支取值。

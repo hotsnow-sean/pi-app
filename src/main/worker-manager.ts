@@ -3,6 +3,7 @@
 import { type BrowserWindow } from 'electron'
 import type { AdapterCatalog } from '../extension-compat/adapter-schema'
 import type { AppEvent } from '@shared/app-events'
+import type { PluginSessionRunEvent } from '@shared/plugin-context'
 import type {
   WorkerCommandInfo,
   WorkerCompletionItem,
@@ -58,17 +59,15 @@ export class WorkerManager {
   private lifecycleChain: Promise<unknown> = Promise.resolve()
   private idleTimer: ReturnType<typeof setInterval> | null = null
   /** 会话运行事件订阅（插件宿主的 sessions.onRunEvent 桥）：idle/failed/cancelled 是终态 */
-  private runEventListeners = new Set<(payload: { sessionFile: string; phase: string; cwd: string }) => void>()
+  private runEventListeners = new Set<(payload: PluginSessionRunEvent) => void>()
 
   /**
-   * 订阅所有会话的运行事件（run started/running/idle/failed/cancelled）。
+   * 订阅所有会话的运行事件（run started/running/idle/failed/cancelled/state）。
    * 这是插件感知「某个会话跑完一轮」的唯一通道——worker 事件本就汇聚在
    * forwardAppEvent，这里只把它分发给订阅者，不做任何过滤。
    * 返回解除订阅函数（插件停用时调用，防止悬空回调）。
    */
-  onSessionRunEvent(
-    listener: (payload: { sessionFile: string; phase: string; cwd: string }) => void,
-  ): () => void {
+  onSessionRunEvent(listener: (payload: PluginSessionRunEvent) => void): () => void {
     this.runEventListeners.add(listener)
     return () => {
       this.runEventListeners.delete(listener)
@@ -351,12 +350,18 @@ export class WorkerManager {
     observeAppEventForCompletion(enriched)
     remoteTap.appEvent(enriched)
     if (event?.type === 'run' && sessionFile) {
-      const phase = (event as { phase?: string }).phase ?? ''
-      for (const listener of this.runEventListeners) {
-        try {
-          listener({ sessionFile, phase, cwd: fromCwd })
-        } catch {
-          /* 订阅者出错不拦事件流 */
+      // phase 是 run 事件的必填字段；缺失说明事件形状不对（旧版 worker / 构造错误），
+      // 与其给订阅者一个空字符串让它去猜，不如不派发——插件按 phase 决定投递语义，
+      // 收到 '' 只会把「未知」当成一个状态存起来。类型上是恒真的，运行时不是，别删。
+      const phase = event.phase
+      if (typeof phase === 'string') {
+        const runEvent: PluginSessionRunEvent = { sessionFile, phase, cwd: fromCwd }
+        for (const listener of this.runEventListeners) {
+          try {
+            listener(runEvent)
+          } catch {
+            /* 订阅者出错不拦事件流 */
+          }
         }
       }
     }

@@ -261,6 +261,8 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 3. manifest 的 zod schema 已是 single source of truth（好），可以顺手 `zod-to-json-schema`
    出一份 `plugin.schema.json` 给编辑器用。
 
+→ 1、2 已落地（见 §五「2.3 的落地方式」），3 未做。
+
 ### 2.4 平台能力缺口（与具体插件无关，但会咬到下一个插件）
 
 | 缺口 | 影响 |
@@ -326,15 +328,40 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 |---|---|---|
 | 1 | P1-1 / P1-2 / P1-3 + P2-1~P2-6 + P2-9 | ✅ `da024b9` |
 | 2 | 2.2 ① 托盘词表通用化、② kind 文案外移、③ 注释与重复类型 | ✅ 插件 v0.7.0 |
+| 3 | 2.3 `PluginContext` 类型化 + 插件侧 SDK 入口 | ✅ 本轮 |
 
 批次 1 与批次 2 都补了测试，且都用「回滚到旧代码」验证过测试确实会失败。
+
+### 2.3 的落地方式（与建议的差异）
+
+建议原文是「`npm pack` 一个极小的 `pi-plugin-sdk`」。实际做成了**仓库内转出 + 逐文件 pragma**：
+
+- 权威声明 `packages/shared/plugin-context.ts`，宿主 `buildContext()` 标注它；
+- `plugins/plugin-sdk.d.ts` 只 `export * from` 那一份（不复制结构，避免漂移）；
+- `plugins/tsconfig.json` 用 `allowJs + checkJs:false`，靠每个 `main.mjs` 首行的
+  `// @ts-check` 逐文件开启——全项目开 `checkJs` 会把 node_modules 里的 JS 一起查，
+  噪音 30 条起步；
+- `npm run typecheck` 已把 `typecheck:plugins` 串进去。
+
+没做成独立 npm 包，是因为当前只有仓库内三个内置插件：真要对外发布时，把
+`plugin-sdk.d.ts` 抽成包即可，类型定义本身不用动。
+
+顺手修掉的两处**真问题**（都是开了检查才暴露的）：
+
+1. `readLog(task, {...})` 的四个参数被 TS 当成全必填，`tailOf` 只传三个 → 类型报错。
+   根因是「省略 offset = 读尾部」这个语义从没写进签名。补 JSDoc 后才说清楚。
+2. `plugins/scheduler/main.mjs` 里 `result.error` 在非 `strictNullChecks` 下取不到
+   （联合判别在该模式下不生效）——改成 `'error' in result`，两种模式都成立。
+
+**已知边界**：插件项目没开 `strictNullChecks`（无类型 JS 全开有 218 条存量错误）。
+所以类型检查保证的是**形状**（成员名、枚举值、参数必填性），不保证 null 安全。
+这条写进了 `plugin-host-api.md` §2，别指望它挡住 `undefined` 解引用。
 
 **仍然待办**（按建议顺序）：
 
 | 项 | 说明 |
 |---|---|
-| 2.3 `PluginContext` 类型化 + SDK `.d.ts` | 投入最大、收益最持久；本仓库历史上两次契约事故（schema 漏参数、冷启动缺工具）根因都在这里 |
-| 3.1 插件 main 拆模块 | 现在 1660 行、七种职责；拆成 shell / log-io / store / report / tools |
+| 3.1 插件 main 拆模块 | 现在 1718 行、七种职责；拆成 shell / log-io / store / report / tools |
 | P2-7 `engines` 校验 | 声明了却不生效的契约比没有更糟 |
 | P2-8 `discoverPlugins` 目录缓存 | 同步 FS 在对话主链路上；顺带缓存 `pluginToolDescriptors()` |
 | P3-3~P3-10 | 都是顺手可修的小项：`PLUGIN_ID` 改用 `ctx.pluginId`、`normSession` 两处合一、`clearTasks` 批量推托盘、启动时不重复推托盘、`plugin-tools` 格式与重复 `asDetails`、多窗口广播收敛、`plugin-content-height` 的 400px 上限写进契约 |

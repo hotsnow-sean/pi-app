@@ -274,10 +274,18 @@ export type PluginToolDescriptor = {
   parameters: Record<string, unknown>
 }
 
-/** 插件工具执行契约：main 侧 invoke('tool.execute', { name, args }) 的返回 */
+/**
+ * 插件工具执行契约：main 侧 `invoke('tool.execute', { name, args, ... })` 的返回。
+ *
+ * 推荐返回 `{ text, details }`：`text` 写给人/模型看（可读文本，不要把 JSON 贴进去），
+ * `details` 放原始对象——宿主一路带到 worker 的 tool result，代码执行类模式里
+ * 被当对象用的就是它。返回纯字符串或任意对象也合法，宿主会归一化。
+ */
 export type PluginToolResult = {
   /** 回灌给模型的文本 */
   text: string
   /** 标记失败（模型会看到错误文本并自行决定重试） */
   isError?: boolean
+  /** 结构化结果（可选）：正文只是文本，机器可读的那份放这里 */
+  details?: Record<string, unknown>
 }

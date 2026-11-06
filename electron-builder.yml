@@ -52,6 +52,10 @@ extraResources:
       - "**/*"
       - "!**/node_modules/**"
       - "!**/.git/**"
+      # 下面两个只在开发期有用：plugin-sdk.d.ts 给编辑器做 JSDoc 补全，
+      # tsconfig.json 给 npm run typecheck:plugins 用。运行时不需要，别混进安装包。
+      - "!plugin-sdk.d.ts"
+      - "!tsconfig.json"
 
 win:
   target:

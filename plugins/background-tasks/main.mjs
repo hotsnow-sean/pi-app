@@ -1,3 +1,5 @@
+// @ts-check
+/// <reference path="../plugin-sdk.d.ts" />
 /**
  * 后台任务 — main 侧服务。
  *
@@ -52,7 +54,8 @@ const SETTING_DEFAULTS = {
   maxLogMb: DEFAULT_MAX_LOG_MB,
 }
 
-let ctx = null
+/** @type {import('../plugin-sdk').PluginContext} */
+let ctx
 let settings = { ...SETTING_DEFAULTS }
 let state = { seq: 0, tasks: [] }
 let logDir = ''
@@ -175,6 +178,15 @@ function barMeta(task) {
  * 不是本插件的状态机：宿主不认识 running/lost，也永远不该认识。业务状态到观感的
  * 映射是插件的责任，见 rowStateOf。
  */
+/**
+ * 业务状态 → 宿主观感词。
+ *
+ * 返回类型故意标成宿主的 `PluginComposerBarRowState`：这里写错一个词（比如顺手写
+ * `'running'`）在类型检查下立刻现形，不必等用户看到一行被画成默认样式的托盘。
+ *
+ * @param {any} task
+ * @returns {import('../plugin-sdk').PluginComposerBarRowState}
+ */
 function rowStateOf(task) {
   if (task.status === 'running') return 'active'
   if (task.status === 'exited') return 'ok'
@@ -183,6 +195,10 @@ function rowStateOf(task) {
   return 'error'
 }
 
+/**
+ * @param {string} sessionFile
+ * @returns {import('../plugin-sdk').PluginComposerBarState | null}
+ */
 function composerBarFor(sessionFile) {
   const mine = state.tasks.filter((t) => sameSession(t.sessionFile, sessionFile))
   if (mine.length === 0) return null
@@ -297,6 +313,16 @@ function logPathFor(task, stream) {
   return stream === 'err' ? task.errPath || '' : task.logPath
 }
 
+/**
+ * 增量读日志。`offset` 省略 = 读尾部窗口（默认行为）；给了就从该字节位置往后读。
+ *
+ * 四个参数全部可选，但**含义不同**：省略 offset 是「读最后一段」，传 0 是「从头读」。
+ * 这个区别靠 JSDoc 写清楚——以前没标注，TS 把四个都当成必填，`tailOf` 那种只传
+ * 三个的调用在类型检查下直接报错（是真错：漏传不等于不传）。
+ *
+ * @param {any} task
+ * @param {{ offset?: number | null, maxBytes?: number, tailLines?: number, stream?: 'out' | 'err' }} opts
+ */
 async function readLog(task, { offset, maxBytes, tailLines, stream }) {
   const file = logPathFor(task, stream)
   if (!file) {
@@ -1462,7 +1488,7 @@ const methods = {
    * 正常路径是「任务一变就推」，这里只是兜底：renderer 重载、推送失败、或 UI 刚拿到
    * 会话上下文时，可以要一次最新值，不必等下一次任务事件。
    */
-  async refreshBar({ sessionFile } = {}) {
+  async refreshBar(/** @type {{ sessionFile?: string }} */ { sessionFile } = {}) {
     pushComposerBar(String(sessionFile || ''))
     return { ok: true, bar: composerBarFor(String(sessionFile || '')) }
   },
@@ -1475,7 +1501,7 @@ const methods = {
    * （这里是 `stop`，定义在 composerBarFor 的 actions 里）。详情定位复用 focus.seq——
    * 右栏面板自己比对，宿主不必知道这套。
    */
-  async composerBarAction({ action, id } = {}) {
+  async composerBarAction(/** @type {{ action?: string, id?: string }} */ { action, id } = {}) {
     const task = taskById(String(id || ''))
     if (!task) throw new Error(`unknown task: ${id}`)
     if (action === 'stop') {
@@ -1522,7 +1548,10 @@ const methods = {
     return { ok: true, id: task.id, rerunOf: source.id }
   },
 
-  async clearTasks({ status, ids, keepRunning } = {}) {
+  async clearTasks(
+    /** @type {{ status?: string | string[], ids?: string | string[], keepRunning?: boolean }} */
+    { status, ids, keepRunning } = {},
+  ) {
     const keep = keepRunning !== false
     const wanted = Array.isArray(status) ? status.map(String) : status ? [String(status)] : []
     const wantedIds = Array.isArray(ids) ? ids.map(String) : ids ? [String(ids)] : []

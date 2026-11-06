@@ -1,3 +1,5 @@
+// @ts-check
+/// <reference path="../plugin-sdk.d.ts" />
 /**
  * 定时任务插件 — main 侧服务。
  *
@@ -15,7 +17,8 @@ const TICK_MS = 5_000
 const MAX_RUNS = 200
 const GRACE_MS = 60_000
 
-let ctx = null
+/** @type {import('../plugin-sdk').PluginContext} */
+let ctx
 let timer = null
 let state = { tasks: [], runs: [] }
 const queue = []
@@ -234,7 +237,10 @@ async function execute(task, missed) {
       ok = true
       text = result.text
     } else {
-      error = result.error
+      // 用 `in` 而不是直接读 result.error：插件项目的 tsconfig 没开 strictNullChecks
+      // （无类型 JS 全开代价太大），该模式下 `ok` 的联合判别不生效，直接取会报
+      // 「Property 'error' does not exist」。`in` 收窄两种模式下都靠得住。
+      error = 'error' in result ? result.error : ''
     }
   } catch (e) {
     error = String(e)
