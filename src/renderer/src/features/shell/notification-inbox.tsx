@@ -61,10 +61,24 @@ function itemColor(item: InboxItem): string {
   return item.tone ? toneColor[item.tone] : outcomeColor[item.outcome]
 }
 
-function sameInboxItems(previous: InboxItem[], next: InboxItem[]): boolean {
+/**
+ * 两个响应是否是同一份信箱。
+ *
+ * 参数刻意收成 `unknown`：宿主可能返回不含 `items` 的对象（IPC 桥没注入时的空实现、
+ * 通道还没注册的老宿主、上游改过 shape）。这一层必须自己判类型——把 `undefined`
+ * 放进 state，下一次渲染就会在 `items.filter` 上炸掉整个外壳。
+ */
+function sameInboxItems(previous: unknown, next: unknown): boolean {
   if (previous === next) return true
-  if (!Array.isArray(next) || previous.length !== next.length) return false
+  if (!Array.isArray(previous) || !Array.isArray(next)) return false
+  if (previous.length !== next.length) return false
   return previous.every((item, index) => JSON.stringify(item) === JSON.stringify(next[index]))
+}
+
+/** 把任意响应收敛成条目数组；不是数组就是「这次没读到」，不能当空信箱处理 */
+function readInboxItems(res: unknown): InboxItem[] | null {
+  const raw = (res as { items?: unknown } | null | undefined)?.items
+  return Array.isArray(raw) ? (raw as InboxItem[]) : null
 }
 
 export function NotificationInbox() {
@@ -80,7 +94,7 @@ export function NotificationInbox() {
   const sessions = useUIStore((s) => s.sessions)
   const currentWorkspace = useUIStore((s) => s.currentWorkspace)
   const setCenterView = useUIStore((s) => s.setCenterView)
-  const waiting = listAttentionSessions(attention, 'needs-you')
+  const waiting = listAttentionSessions(attention || {}, 'needs-you')
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
   const filteredItems = filter === 'unread' ? items.filter((i) => i.unread) : items
   const unread = items.filter((i) => i.unread).length + waiting.length
@@ -89,8 +103,14 @@ export function NotificationInbox() {
   const load = useCallback(async () => {
     try {
       const res = await ipcClient.invoke('notifications.inbox', {})
+      const next = readInboxItems(res)
+      if (!next) {
+        // 桥没注入 / 通道没注册 / 老宿主：报「读取失败」，别把 undefined 写进 state
+        setLoadFailed(true)
+        return
+      }
       // Same inbox → keep the array identity so the bar and popover do not re-render every poll.
-      setItems((previous) => (sameInboxItems(previous, res.items) ? previous : res.items))
+      setItems((previous) => (sameInboxItems(previous, next) ? previous : next))
       setLoadFailed(false)
     } catch {
       setLoadFailed(true)
