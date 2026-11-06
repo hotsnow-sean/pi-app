@@ -124,6 +124,13 @@ export function createWindow(closeToTray = false): BrowserWindow {
     console.error(`[Renderer] Failed to load: ${errorCode} ${errorDescription} URL: ${validatedURL}`)
   })
 
+  // preload 挂了 → 渲染端没有 window.piDesktop → 界面画得出来但点哪都没反应，
+  // 表现得像「IPC 全坏了」。这条日志是判断该类故障的第一现场，必须落在 main.log 里，
+  // 不能只出现在 dev 的 renderer 控制台（打包态根本看不到）。
+  mainWindow.webContents.on('preload-error', (_e, preloadPath, error) => {
+    console.error(`[Window] preload failed: ${preloadPath}\n${error?.stack ?? error}`)
+  })
+
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error(`[Renderer] Process gone: ${details.reason} exitCode=${details.exitCode}`)
     if (details.reason === 'crashed' || details.reason === 'killed' || details.reason === 'oom') {
