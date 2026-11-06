@@ -204,6 +204,15 @@ const tools = {
     }
     const changed = Object.keys(patch).filter((key) => key !== 'schedule')
     if (patch.schedule) changed.push('调度')
+    // 空串在这里的含义不可能是「清空」：normalizeTaskInput 会把它当成「没给」，
+    // 于是新时间落到「现在 + 5 分钟」——那是 sched_create 的便利默认，用在编辑上
+    // 就变成「悄悄把一次性任务挪到五分钟后」。宁可拒绝，也不替用户做这个决定。
+    if (patch.schedule && patch.schedule.at !== undefined && String(patch.schedule.at).trim() === '') {
+      return fail(
+        'at 不能为空：一次性任务必须有一个具体执行时刻（ISO 8601，如 2026-11-07T09:00）。' +
+          '想改用重复方式请传 kind（daily/weekly/monthly/interval）。',
+      )
+    }
     // saveTask 会拒掉重名与非法值：转成 isError 而不是让宿主包成 "sched_update failed: …"
     let saved
     try {
@@ -256,8 +265,21 @@ const tools = {
           details: { id: task.id, skipped: 'overlap' },
         }
       }
+      if (result.skipped === 'offline') {
+        // 插件已经不再激活（停用/重载中）。这不是「排队满」，报错要说实话
+        return {
+          text: `「${task.name}」没有开始：定时任务插件当前未激活（可能刚被停用或正在重新加载）。稍后再试。`,
+          details: { id: task.id, skipped: 'offline' },
+        }
+      }
+      if (result.skipped === 'queue_full') {
+        return {
+          text: `「${task.name}」没有开始：排队已满（同时排队的任务太多）。等前面的跑完再试一次。`,
+          details: { id: task.id, skipped: 'queue_full' },
+        }
+      }
       return {
-        text: `「${task.name}」没有开始：排队已满（同时排队的任务太多）。等前面的跑完再试一次。`,
+        text: `「${task.name}」没有开始（原因：${result.skipped || '未知'}）。`,
         details: { id: task.id, skipped: result.skipped },
       }
     }

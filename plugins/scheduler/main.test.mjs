@@ -748,6 +748,18 @@ describe('工具', () => {
     expect(detail.text).toContain('累计完成：1 次')
   })
 
+  it('sched_update 拒绝空的 at，而不是悄悄挪到五分钟后', async () => {
+    const at = new Date(Date.now() + 3_600_000).toISOString()
+    const created = await createTask({ kind: 'once', at })
+    const before = (await invoke('snapshot')).tasks[0].nextRunAt
+    const res = await tool('sched_update', { id: created.details.id, at: '' })
+    expect(res.isError).toBe(true)
+    expect(res.text).toContain('at 不能为空')
+    // 关键：计划没被动过。空串若落到 normalizeTaskInput 的默认值，会被改成 now+5min
+    const after = (await invoke('snapshot')).tasks[0].nextRunAt
+    expect(after).toBe(before)
+  })
+
   it('sched_update 部分更新，只改传了的字段', async () => {
     const created = await createTask()
     const res = await tool('sched_update', { id: created.details.id, time: '09:15' })

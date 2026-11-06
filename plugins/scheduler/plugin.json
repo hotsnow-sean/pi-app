@@ -145,7 +145,7 @@
           },
           "at": {
             "type": "string",
-            "description": "New ISO 8601 local date-time for once mode; a time in the past is rejected."
+            "description": "New ISO 8601 local date-time for once mode; a time in the past is rejected. An empty string is rejected too — a once task always needs a concrete time. To switch away from once, pass kind instead."
           },
           "cwd": {
             "type": "string",
