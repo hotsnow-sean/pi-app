@@ -43,8 +43,3 @@ export function resolvePreloadFile(
 export function resolveRendererHtml(appPath?: string): string {
   return join(resolveAppRoot(appPath), 'out', 'renderer', 'index.html')
 }
-
-/** 仓库根的静态资源（build/icon.ico、resources/icon.png 等）。 */
-export function resolveAppAsset(...segments: string[]): string {
-  return join(resolveAppRoot(), ...segments)
-}
