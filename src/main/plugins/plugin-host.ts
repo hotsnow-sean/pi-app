@@ -12,6 +12,7 @@ import type {
   PluginAgentPromptSpec,
   PluginAskOptions,
   PluginContext,
+  PluginInboxItem,
   PluginInstanceApi,
   PluginModule,
   PluginSessionRunEvent,
@@ -22,6 +23,7 @@ import { PLUGIN_MESSAGE_CUSTOM_TYPE, type PluginMessageOrigin } from '@shared/pl
 import type { PluginManifest } from '@shared/plugin-manifest'
 import type { PluginUIQuestion, PluginUIQuestionnaireResult } from '@shared/plugin-ui'
 import { errorMessage } from '@shared/error-message'
+import { pushPluginInbox } from '../completion-notification'
 
 /**
  * 插件 main 侧宿主：动态加载 main.mjs，注入受控 API（ctx），转发 invoke。
@@ -198,6 +200,24 @@ function buildContext(pluginId: string, disposers: Array<() => void>): PluginCon
           return
         }
         publishPluginComposerBar(pluginId, file, bar)
+      },
+      /**
+       * 投一条到顶栏信箱。用于「跑完时用户不在跟前」的提醒（定时任务、监控类）——
+       * 系统通知会被忽略，信箱留一条可回看的记录。
+       *
+       * 不抛错：插件侧（尤其定时任务的后台执行）不该因为一次信箱写入失败而中断。
+       */
+      inbox: (item: PluginInboxItem): void => {
+        const title = String(item?.title ?? '').trim()
+        if (!title) {
+          console.warn(`[plugin:${pluginId}] ui.inbox ignored: title required`)
+          return
+        }
+        try {
+          pushPluginInbox(pluginId, { ...item, title })
+        } catch (error) {
+          console.warn(`[plugin:${pluginId}] ui.inbox failed:`, error)
+        }
       },
     },
     runAgentPrompt,

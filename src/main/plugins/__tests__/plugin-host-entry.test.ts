@@ -28,6 +28,9 @@ vi.mock('../plugin-tools', () => ({
   pluginToolDescriptors: () => [],
 }))
 vi.mock('../../worker-manager', () => ({ workerManager: {} }))
+// ctx.ui.inbox 的落点在 completion-notification；这里测的是路径校验，不需要真的信箱
+// （不 mock 会把 main/window.ts 的 electron 依赖拉进来，node 环境直接炸）
+vi.mock('../../completion-notification', () => ({ pushPluginInbox: () => {} }))
 
 import { resolvePluginPanelEntry } from '../plugin-host'
 

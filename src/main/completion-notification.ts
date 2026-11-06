@@ -1,5 +1,6 @@
 import { basename } from 'path'
 import type { AppEvent, CompletionEvent } from '@shared/app-events'
+import type { PluginInboxItem } from '@shared/plugin-context'
 import { getMainWindow } from './window'
 import { getPendingWorkerSessionFile } from './session-bind-state'
 import {
@@ -85,6 +86,16 @@ export function deliverTestCompletionNotification(): void {
 
 export function listCompletionInbox() {
   return getController().listInbox()
+}
+
+/**
+ * 插件投递一条到同一个信箱（`ctx.ui.inbox` 的实现落点）。
+ *
+ * 刻意复用一个 inbox 而不是给插件另开一个：未读红点、标已读、Dock 徽章计数、
+ * 4s 轮询都是现成的，用户也不需要记「哪个红点是谁的」。
+ */
+export function pushPluginInbox(pluginId: string, item: PluginInboxItem): void {
+  getController().pushPluginInbox(pluginId, item)
 }
 
 export function markCompletionInboxUnread(notificationId: string, unread: boolean): void {

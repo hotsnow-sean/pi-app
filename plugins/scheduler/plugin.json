@@ -1,8 +1,8 @@
 {
   "id": "scheduler",
   "name": "定时任务",
-  "version": "0.2.0",
-  "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月 / 间隔，支持有效期、启停、立即运行、条件通知与运行历史。",
+  "version": "0.3.0",
+  "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月 / 间隔，支持有效期、启停、立即运行、条件通知（顶栏信箱 + 系统通知）与运行历史。",
   "icon": "Clock",
   "main": "main.mjs",
   "views": [

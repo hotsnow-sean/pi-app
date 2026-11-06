@@ -516,12 +516,43 @@ v0.2 落 P0 的全部内容（零宿主改动）：
 
 | 批次 | 内容 | 依赖 |
 | --- | --- | --- |
-| v0.2（批次 A/B） | 条件通知 + 应用入口未读 + 系统通知 | 零宿主改动 |
-| v0.3（批次 C） | `ctx.ui.inbox` 宿主能力 + scheduler 接入 | 5 文件 + 契约测试 + renderer 手测 |
+| v0.2（批次 A/B）✅ | 条件通知 + 应用入口未读 + 系统通知 | 零宿主改动 |
+| v0.3（批次 C）✅ | `ctx.ui.inbox` 宿主能力 + scheduler 接入 | 5 文件 + 测试 |
 
 **为什么不一锅端**：v0.2 的 main 侧已经是「拆模块 + 状态机 + 6 个工具 + 条件通知」一整批，再塞
 一个跨 main/shared/renderer 的宿主能力，会让这批的可验收性变差（renderer 改动没有单测覆盖，
 只能手测）。先把「什么时候发」做对，再换「发到哪里」。
+
+#### 落地记录（v0.3，2026-11-06）
+
+实际改动（比清单少了 1 个：`pluginId` 由宿主注入，插件条目里不带）：
+
+| 文件 | 实际改动 |
+| --- | --- |
+| `packages/shared/plugin-context.ts` | `PluginUI.inbox(item)` + `PluginInboxItem` / `PluginInboxTone` / `PluginInboxTarget` |
+| `completion-notification-controller.ts` | `CompletionCard` 加 `target` / `tone`；新增 `pushPluginInbox(pluginId, item)` |
+| `completion-notification.ts` | 导出 `pushPluginInbox(pluginId, item)` |
+| `src/main/plugins/plugin-host.ts` | `ctx.ui.inbox()`：校验 title、try/catch 不抛错 |
+| `renderer/.../notification-inbox.tsx` | `target` 点击 → `setCenterView` + `markRead`；`tone` 决定图标与颜色 |
+| `doc/dev/plugin-host-api.md` | §2 表格 + 新增 §6.3 |
+
+与本节上面设想的差异（都是**收窄**，不是加码）：
+
+1. **没有 `deliveryChannel` 设置**。做一个「发到系统通知 / 发到信箱 / 两个都发」的开关，
+   等于让用户先理解两套渠道的存在；实际语义很清楚——条件满足就两边都投，系统通知负责
+   「当下」，信箱负责「回来还看得到」。少一个设置项，少一处解释成本。
+2. **去重靠 `dedupeKey`（= taskId）而不是 `ref`**：同一任务的条目在信箱里只保留最新一条，
+   替换时重新变未读。没有它，一个每分钟跑的任务会把 200 格信箱刷满、红点永久点亮。
+3. **没做 `pendingFocusRunId` 深链**：点信箱只切到插件视图（`CenterView` 不带参数）。
+   插件自己的未读标记（`snapshot.unreadByTask` + 打开详情即 `markSeen`）足够把人引到任务上，
+   再加一条「带着 runId 跳转」的公共类型改造不值当。
+
+测试：controller 侧 4 条（未读/不弹通知、dedupeKey 替换、跨插件不串、空 title 丢弃），
+scheduler 侧 2 条（到点执行同时投通知与信箱且带 target、手动执行一条都不投）。
+
+注意 **renderer 那段没有单测覆盖**（项目里没有 inbox 的组件测试），靠手测：
+`sched_create` 一个 once 任务到点后，顶栏红点亮起 → 点开列表里出现「定时任务：…」→
+点击应切到定时任务视图并把该条标已读。
 
 ## 9. 风险与对策
 
