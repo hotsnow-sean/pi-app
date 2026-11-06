@@ -131,6 +131,8 @@ export function skipText(reason) {
       return '应用退出'
     case 'disabled':
       return '任务已停用'
+    case 'offline':
+      return '插件未激活'
     default:
       return ''
   }

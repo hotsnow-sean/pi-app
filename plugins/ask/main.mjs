@@ -18,6 +18,12 @@
 const MAX_QUESTIONS = 8
 const MAX_OPTIONS = 8
 const MAX_RECORDS_HARD = 500
+/**
+ * 宿主对单次插件工具调用有 20 分钟硬超时（超时后发 plugin-tool-cancel 并回
+ * plugin_tool_timeout）。插件自己等得更久只会让用户白等一场——问卷还挂着，
+ * 工具调用却已经被判死。留 2 分钟余量给回答之后的重启一轮。
+ */
+const MAX_WAIT_MS = 18 * 60_000
 
 const SETTING_DEFAULTS = { timeoutSec: 600, recordHistory: true, historyLimit: 50 }
 
@@ -66,6 +72,13 @@ function validateShape(raw) {
     const no = i + 1
     if (!item || typeof item !== 'object') return `第 ${no} 题不是对象`
     const options = Array.isArray(item.options) ? item.options : []
+    // 少给选项会让 normalizeQuestions 静默丢掉整道题——用户看到的问卷比模型以为的少，
+    // 而模型仍以为问全了。与「超限截断」一样，这里选择报错而不是裁剪。
+    if (options.length < 2) {
+      return options.length === 0
+        ? `第 ${no} 题没有 options：每题至少给 2 个具体选项；只有一个选择时不必提问，直接按它做。`
+        : `第 ${no} 题只有 1 个选项：至少 2 个；如果确实只有一个选择，直接按它做，不必提问。`
+    }
     if (options.length > MAX_OPTIONS) {
       return `第 ${no} 题有 ${options.length} 个选项，最多 ${MAX_OPTIONS} 个：合并相近选项，或把长尾项留给用户自己输入。`
     }
@@ -155,7 +168,8 @@ async function runAskTool(args, signal) {
     }
   }
   const timeoutSec = Number(settings.timeoutSec)
-  const timeoutMs = Number.isFinite(timeoutSec) && timeoutSec > 0 ? timeoutSec * 1000 : 0
+  const timeoutMs =
+    Number.isFinite(timeoutSec) && timeoutSec > 0 ? Math.min(timeoutSec * 1000, MAX_WAIT_MS) : 0
   const result = await ctx.ui.ask(questions, { timeoutMs, signal })
   remember(questions, result, Date.now())
   return { text: formatForModel(questions, result) }

@@ -17,7 +17,7 @@
     {
       "name": "ask_user",
       "label": "向你提问",
-      "description": "Ask the user structured questions and wait for the answers. Use it when a decision, preference, or missing detail blocks progress: unclear requirements, a risky irreversible step, or several reasonable options. Prefer asking over guessing. Keep it to the questions you actually need, 1-4 is usually enough.",
+      "description": "Ask the user structured questions and wait for the answers. Use it when a decision, preference, or missing detail blocks progress: unclear requirements, a risky irreversible step, or several reasonable options where the choice is really the user's — when the alternative is guessing a requirement, prefer asking. This call blocks the turn until the user answers or the wait times out (a timeout comes back as 未回答), so do not use it as a cheap confirmation of an obvious next step, and never ask for something you could find out yourself from the files, git or docs. Keep it to the questions you actually need, 1-4 is usually enough.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -73,10 +73,10 @@
       "key": "timeoutSec",
       "type": "number",
       "label": "等待回答的最长时间（秒）",
-      "description": "超时按「未回答」继续；0 表示一直等，直到你作答或取消。",
+      "description": "超时按「未回答」继续；0 表示一直等（仍受宿主 20 分钟的单次工具调用上限约束，实际最多约 18 分钟）。",
       "default": 600,
       "min": 0,
-      "max": 7200,
+      "max": 1080,
       "step": 30
     },
     {

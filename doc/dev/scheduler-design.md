@@ -796,9 +796,10 @@ UI 与工具的唯一写入口，规则只有一份（此前 UI 允许重名任�
 
 ### 15.3 验证
 
-- `plugins/scheduler/main.test.mjs` 41 条（37 → 41）：`SCHED:failed` 的失败态/原因/正文/基线不污染、
+- `plugins/scheduler/main.test.mjs` 42 条（37 → 42）：`SCHED:failed` 的失败态/原因/正文/基线不污染、
   无原因时回落首行、`never` 与 `failures` 成功的原因码与工具回执文案（含重启后仍保留，`normalizeRun`
-  是白名单字段）、`failures` + `SCHED:failed` 的系统通知与信箱闭环；到点用例补三条 `notifyWhy` 断言
+  是白名单字段）、`failures` + `SCHED:failed` 的系统通知与信箱闭环、`sched_update({ at: '' })` 被拒且
+  计划不变；到点用例补三条 `notifyWhy` 断言
 - `plugins/scheduler/ui/app.test.mjs` 9 条（8 → 9）：时间线直接显示插件算好的原因
 
 ### 15.4 不做「已通知」的正向标注（v14 的 P4）
@@ -809,3 +810,13 @@ v14 建议给「结果有变化」也补一句「已通知」，让每行自解�
   「`scheduled` 触发方式不标」是同一个取舍。
 - 「未通知必有原因」的约定已经写进 `sched_runs` 的描述（机器读得到），人读时只要看到没有
   「未提示」类标注就是发了。UI 的标签位优先留给触发方式与跳过原因。
+
+### 15.5 `sched_update` 拒绝空的 `at`（2026-11-06 审查）
+
+`normalizeTaskInput` 里 once 任务缺 `at` 会回落到「现在 + 5 分钟」——那是给 `sched_create`
+的便利默认（「提醒我一下」不必算时刻）。但同一条回落作用在**编辑**上就变成「悄悄把一次性
+任务挪到五分钟后」：`at: ''` 在 `pickPatch` 里算「传了」，合并进 `merged.schedule.at` 后又被
+当成「没给」，于是计划被改而回执只说「已更新」。
+
+修法：`sched_update` 收到空字符串 `at` 直接 `isError` 并说明「一次性任务必须有具体时刻，
+要换重复方式请传 `kind`」。宁可让模型重问一次，也不替用户决定新时间。
