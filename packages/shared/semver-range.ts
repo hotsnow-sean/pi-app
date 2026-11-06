@@ -4,14 +4,17 @@
  * 不引入 semver 包：仓库没有直接依赖先例，而插件宿主需要的语法子集很小。
  * 支持（与 npm engines 字段的常见写法对齐）：
  *   - 精确版本：`1.2.3`
- *   - 比较符：`>=1.2.0`、`>1.0.0`、`<=2.0.0`、`<2.0.0`、`=1.2.3`
- *   - 脱字符/波浪号：`^1.2.3`（同主版本内）、`~1.2.3`（同主次版本内）
- *   - 通配：`1.x`、`1.2.x`、`*`
+ *   - 比较符：`>=1.2.0`、`>1.0.0`、`<=2.0.0`、`<2.0.0`、`=1.2.3`；
+ *     比较符与版本号之间允许空格（`>= 1.4.0`）
+ *   - 脱字符/波浪号：`^1.2.3`（同主版本内）、`~1.2.3`（同主次版本内）、`~1`（≙ `1.x`）
+ *   - 通配与缺省组件：`1.x`、`1.4.x`、`*`；`1.4` 作为 range ≙ `1.4.x`（npm 语义）；
+ *     比较符下的缺省/通配组件按 npm 部分区语义展开
+ *     （`>1.4` ≙ `>=1.5.0`、`<=1.4` ≙ `<1.5.0`、`<1.x` ≙ `<1.0.0`、`<=1.4.x` ≙ `<1.5.0`）
  *   - 组合：空格 = AND，`||` = OR
- * 缺省组件按 0 处理（`1.2` ≙ `1.2.0`）。
  *
- * 不支持 prerelease/build 元数据的精细规则（`1.2.3-beta` 按字符串参与比较，
- * 但插件 engines 用到这种写法的概率极低，出错方向是「宽松」而非「误拒」）。
+ * prerelease：宿主版本带 prerelease 按更小处理（semver 语义）；range 目标带
+ * prerelease 只在写全三位时参与比较。精细的 prerelease 排除规则不支持——
+ * 插件 engines 用到这种写法的概率极低，出错方向是「宽松」而非「误拒」。
  */
 
 type Triple = [number, number, number, string?]
@@ -36,70 +39,118 @@ function compareTriple(a: Triple, b: Triple): number {
   return 0
 }
 
-/** 单个比较子（已去掉操作符）是否满足操作符约束 */
-function matchComparator(version: Triple, op: string, raw: string): boolean {
-  const parts = raw.split('.')
-  const isWildcard = (p: string | undefined) => p === '*' || p === 'x' || p === 'X'
-  const exactLike = op === '' || op === '='
+const BARE_OPS = ['>=', '<=', '>', '<', '=', '^', '~']
 
-  // X-range：`*`、`1.x`、`1.4.x`，以及精确匹配下组件缺省的 `1` / `1.4`
-  // （npm 语义里 `1.4` 作为 range 等价于 `1.4.x`，不是 `1.4.0` 的精确匹配）
-  let precision = -1
-  if (isWildcard(parts[0])) precision = 0
-  else if (parts.length > 1 && isWildcard(parts[1])) precision = 1
-  else if (parts.length > 2 && isWildcard(parts[2])) precision = 2
-  else if (exactLike && parts.length < 3) precision = parts.length - 1
-
-  if (precision === 0) return true
-  if (precision === 1 || precision === 2) {
-    const major = Number(parts[0])
-    if (!Number.isInteger(major)) return true // 通配写法里混了垃圾 → fail open
-    if (version[0] !== major) return false
-    if (precision === 1) return true
-    const minor = Number(parts[1])
-    if (!Number.isInteger(minor)) return true
-    return version[1] === minor
+/** 解析单个比较子的版本主体（已去掉操作符），返回声明到的组件位数与各分量 */
+function parseComparatorBody(raw: string):
+  | { precision: 0 | 1 | 2 | 3; major: number; minor: number; patch: number; prerelease?: string }
+  | null {
+  const s = raw.trim().replace(/^[vV]/, '')
+  const m = /^(\d+|[xX*])(?:\.(\d+|[xX*]))?(?:\.(\d+|[xX*]))?(?:-([0-9A-Za-z.-]+))?$/.exec(s)
+  // 语法不合法 → 调用方放行：engines 是作者的自我声明，解析失败不该把整个插件判死，
+  // 明确的拒绝只留给「能解析且确实不满足」的路径
+  if (!m) return null
+  const isWildcard = (p: string | undefined) => p === undefined || p === '*' || p === 'x' || p === 'X'
+  const num = (p: string | undefined): number | null => {
+    if (p === undefined || isWildcard(p)) return 0
+    const n = Number(p)
+    return Number.isInteger(n) ? n : null
   }
 
-  const target = parseVersion(raw)
-  // 语法不合法 → 放行：engines 是作者的自我声明，解析失败不该把整个插件判死，
-  // 明确的拒绝只留给「能解析且确实不满足」的路径
-  if (!target) return true
-  const c = compareTriple(version, target)
+  // precision = 声明到的组件位数（第一个通配/缺省位截断）。
+  // `1.4` 与 `1.4.x` 同为 precision 2——npm 语义里两者等价
+  let precision: 0 | 1 | 2 | 3 = 3
+  if (isWildcard(m[1])) precision = 0
+  else if (isWildcard(m[2])) precision = 1
+  else if (isWildcard(m[3])) precision = 2
+
+  const major = num(m[1])
+  if (major === null) return null // 通配写法里混了垃圾 → fail open
+  const minor = num(m[2])
+  if (minor === null) return null
+  const patch = num(m[3])
+  if (patch === null) return null
+
+  // prerelease 只在写全三位时参与比较（部分版本上的 prerelease 语义太含糊，直接忽略）
+  const prerelease = precision === 3 ? m[4] : undefined
+  return { precision, major, minor, patch, prerelease }
+}
+
+/** 单个比较子是否满足操作符约束 */
+function matchComparator(version: Triple, op: string, raw: string): boolean {
+  const body = parseComparatorBody(raw)
+  if (!body) return true
+  const { precision, major, minor, patch, prerelease } = body
+
+  // 主版本通配：`*` 与 `>=*` / `<=*` 等价于「任何版本」；`>*` / `<*` 在 npm 里无匹配
+  if (precision === 0) return !(op === '>' || op === '<')
+
+  const base: Triple = [major, minor, patch, prerelease]
+  /** 第 pos 位 +1、其后清零 —— npm 部分区语义的排他上界 */
+  const nextAt = (pos: number): Triple => {
+    if (pos <= 0) return [major + 1, 0, 0]
+    if (pos === 1) return [major, minor + 1, 0]
+    return [major, minor, patch + 1]
+  }
+
+  if (op === '' || op === '=') {
+    // x-range / 缺省组件：`1.4` ≙ `1.4.x`，只比对声明到的位
+    if (version[0] !== major) return false
+    if (precision === 1) return true
+    if (version[1] !== minor) return false
+    if (precision === 2) return true
+    return compareTriple(version, base) === 0
+  }
+
+  const cLow = compareTriple(version, base)
   switch (op) {
     case '>=':
-      return c >= 0
+      return cLow >= 0
     case '>':
-      return c > 0
-    case '<=':
-      return c <= 0
+      // `>1.4` ≙ `>=1.5.0`，`>1.4.2` 才是严格大于
+      return precision === 3 ? cLow > 0 : compareTriple(version, nextAt(precision - 1)) >= 0
     case '<':
-      return c < 0
-    case '=':
-      return c === 0
+      return cLow < 0
+    case '<=':
+      // `<=1.4` ≙ `<1.5.0`，`<=1.4.2` 才是含端点
+      return precision === 3 ? cLow <= 0 : compareTriple(version, nextAt(precision - 1)) < 0
     case '^': {
-      // 同主版本内（0.x 按 0.x.y 同次版本内 —— 与 npm 语义一致）
-      if (version[0] !== target[0]) return false
-      if (target[0] > 0) return c >= 0
-      if (version[1] !== target[1]) return false
-      return c >= 0
+      if (cLow < 0) return false
+      // 同主版本内；0.x 按 0.x.y 收窄；^0.0.x 锁补丁位（与 npm 语义一致）
+      let upper: Triple
+      if (precision === 1 || major > 0) upper = nextAt(0)
+      else if (precision === 2 || minor > 0) upper = nextAt(1)
+      else upper = nextAt(2)
+      return compareTriple(version, upper) < 0
     }
     case '~': {
-      if (version[0] !== target[0]) return false
-      if (version[1] !== target[1]) return false
-      return c >= 0
+      if (cLow < 0) return false
+      // ~1 ≙ 1.x；~1.2 / ~1.2.3 收在 1.2.x 内
+      const upper = precision === 1 ? nextAt(0) : nextAt(1)
+      return compareTriple(version, upper) < 0
     }
     default:
-      // 无操作符 = 精确匹配
-      return c === 0
+      // 未知操作符 → fail open
+      return true
   }
 }
 
 /** 解析一个 AND 组（空格分隔），全部满足才算满足 */
 function matchAndGroup(version: Triple, group: string): boolean {
-  const ops = group.trim().split(/\s+/).filter(Boolean)
-  if (ops.length === 0) return false
-  return ops.every((token) => {
+  const tokens = group.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return false
+  // 比较符与版本号之间允许空格：`>= 1.4.0` 先拼回一个 token 再解析
+  const merged: string[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    if ((BARE_OPS as string[]).includes(t) && i + 1 < tokens.length) {
+      merged.push(t + tokens[i + 1])
+      i++
+    } else {
+      merged.push(t)
+    }
+  }
+  return merged.every((token) => {
     const m = /^(>=|<=|>|<|=|\^|~)?\s*(.+)$/.exec(token)
     if (!m) return false
     return matchComparator(version, m[1] ?? '', m[2])
@@ -116,5 +167,8 @@ export function satisfiesHostRange(hostVersion: string, range: string): boolean 
   if (!version) return true
   const trimmed = range.trim()
   if (!trimmed || trimmed === '*') return true
-  return trimmed.split('||').some((group) => matchAndGroup(version, group))
+  const groups = trimmed.split('||')
+  // `a ||` / `|| b` 这类不完整的 OR 语法 → fail open
+  if (groups.some((g) => !g.trim())) return true
+  return groups.some((group) => matchAndGroup(version, group))
 }

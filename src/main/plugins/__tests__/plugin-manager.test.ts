@@ -45,7 +45,7 @@ beforeEach(() => {
 })
 
 describe('discoverPlugins', () => {
-  it('engines 满足 → 正常发现；不满足 → 不可激活并带诊断信息（P2-7）', () => {
+  it('engines 满足 → 正常发现；不满足 → 不可激活并保留身份进设置页（P2-7 + 复审 P1）', () => {
     writePlugin(root, 'ok-plugin', { engines: { 'pi-desktop': '>=1.0.0' } })
     writePlugin(root, 'greedy-plugin', { engines: { 'pi-desktop': `>=99.0.0` } })
 
@@ -53,9 +53,21 @@ describe('discoverPlugins', () => {
     const ok = plugins.find((p) => p.manifest?.id === 'ok-plugin')
     const greedy = plugins.find((p) => p.error?.includes('engines'))
     expect(ok?.manifest).toBeTruthy()
-    // 声明了「需要 host ≥ x」就要真的有人管：不满足 = manifest 判死，设置页能看到原因
+    // 声明了「需要 host ≥ x」就要真的有人管：不满足 = 不可激活，但清单本身是好的——
+    // manifest 保留（blockedManifest），设置页才能显示这行插件是谁、为什么没加载
     expect(greedy?.manifest ?? null).toBeNull()
+    expect(greedy?.blockedManifest?.id).toBe('greedy-plugin')
+    expect(greedy?.errorKind).toBe('engines')
     expect(greedy?.error).toContain(`host version ${HOST_VERSION} does not satisfy`)
+    expect(greedy?.enabled).toBe(false)
+  })
+
+  it('engines 语法不合法 → fail open，插件仍被发现（fail open 承诺的接线测试）', () => {
+    // satisfiesHostRange 自身测过 fail open，这条守住 readManifest 的接线没有把它接反
+    writePlugin(root, 'junk', { engines: { 'pi-desktop': 'latest!!!' } })
+    const p = discoverPlugins().find((x) => x.manifest?.id === 'junk')
+    expect(p?.manifest).toBeTruthy()
+    expect(p?.error).toBeUndefined()
   })
 
   it('目录缓存：相邻两次调用不重扫；根目录变化后失效重扫（P2-8）', () => {

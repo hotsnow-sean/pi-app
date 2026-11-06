@@ -1,5 +1,9 @@
 # 插件宿主 + background-tasks 代码审查（2026-11-06）
 
+> ⚠️ 行号说明：正文里的 `main.mjs:NNN` 指审查时的**拆分前**单文件（实测 1732 行，
+> 当时误写作 1644）。批次 3.1 已拆成薄入口 + `lib/` 十一模块（见
+> background-tasks-design.md §26），按行号找代码请对照 §26.1 的分层表。
+
 审查范围：`plugins/background-tasks/**`（main.mjs 1644 行 / ui/app.js 476 行 / plugin.json）、
 `src/main/plugins/**`（1285 行）、`packages/shared/plugin-*.ts`、worker 侧插件工具链路
 （`worker-plugin-tools.ts`、`worker-handlers-turn.ts` 的 customPrompt）、renderer 侧
@@ -363,7 +367,37 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 
 | 项 | 说明 |
 |---|---|
-| ~~3.1 插件 main 拆模块~~ | ✅ 已拆（薄入口 + 10 个 lib，见 background-tasks-design.md §26） |
+| ~~3.1 插件 main 拆模块~~ | ✅ 已拆（薄入口 + 11 个 lib，见 background-tasks-design.md §26） |
 | ~~P2-7 `engines` 校验~~ | ✅ 批次 5（`packages/shared/semver-range.ts` 精简 range 匹配 + readManifest 校验，不满足 = 不可激活并进设置页诊断） |
 | ~~P2-8 `discoverPlugins` 目录缓存~~ | ✅ 批次 5（缓存键 = 各根目录 mtime，enabled 现算、启停抬代数；`pluginToolDescriptors()` 挂发现代数上缓存） |
 | ~~P3 小项~~ | ✅ 批次 5：P3-1/2/6/8 已随批次 1/2/4 顺手修掉；本轮修 P3-3（`ctx.pluginId` 为准，硬编码只做测试兜底）、P3-4（两份实现物理上合不了——iframe 没 node 模块——改为导出 + ui/main 等价性守门测试）、P3-5（clearTasks 按会话聚合推送）、P3-7（格式）、P3-9（broadcastEvent 收敛到 ipc/registry）、P3-10（400px 上限提成 MAX_CONTENT_HEIGHT 并写进 plugin-host-api.md） |
+
+---
+
+## 批次 6：子代理复审（2026-11-06 下午）
+
+三个并行复审代理分别盯：①插件本体（拆模块后的 lib/）、②宿主插件层（manager/tools/semver/共享包）、
+③测试与文档一致性。发现与处置：
+
+### 已修
+
+| 项 | 问题 | 修法 |
+|---|---|---|
+| P0 semver off-by-one | `precision = parts.length - 1` 少一档：`"1.4"` ≙ `1.x`、`"1"` ≙ `*`，engines 等于没生效 | 重写 matchComparator：按 npm 部分区语义展开（`">1.4"`≙`>=1.5.0`、`"<1.x"`≙`"<1.0.0"`、`"~1"`≙`"1.x"`、`"^0.0.x"` 锁补丁位），补 11 组正反向用例 |
+| P0 `REPORT_TAIL_LINES` 未导出 | 拆模块搬家丢连接线，`bg_output` 默认尾部 20 行失效（`imp()` 返回 any，tsc 抓不到） | log-io 加 `export` + 补「不传 tailLines 得 20 行」回归测试 |
+| P0 semver 空格比较符 | `">= 1.4.0"` 被拆成裸 op + 精确匹配，整组判 false（误拒合法插件） | matchAndGroup 先把裸操作符 token 与后继版本拼回再解析 |
+| P1 engines 拒载 UI 不可达 | 拒载时 manifest 置 null → IPC id 空串 → 设置页过滤掉整行，用户看不到原因 | 新增 `blockedManifest` + `errorKind:'engines'`，设置页徽章「版本不满足」/「清单有误」分开（新增 i18n 键） |
+| P1 跨代写盘 | disposeTasks 只清 Map 不摘 child 监听：热重载后旧代 exit 回调会用旧代 state 覆盖新代任务表 + 重复回报 | disposeTasks `removeAllListeners()` + `disposed` 守卫 + deactivate 置 `rt.ctx=null`（save/deliver 据此 no-op）+ recover 只在动过表时 save |
+| P1 sweep 误删 | 宿主 readStorage fail open：读失败=合法空表 → sweepOrphanFiles 把有主日志全删光 | load() 只认「本插件写过的表」（seq/tasks 任一存在），读不出则跳过 sweep 并记日志；两条路径 + 对照组都有回归测试 |
+| P2 守门漏网 | 静态 import 正则抓不到多行写法；无 `?v=` 的相对动态 import 不违规；imp() 丢 `+Q` 无人守 | 守门测试按 `from '<相对>'` 全文扫 + 新增动态 import 与 imp+Q 两条守卫（只盯插件自身目录，类型注释里的 `import('../plugin-sdk')` 不误伤） |
+| P2 快修 | invoke 分发可命中 `constructor`/`toString`；activate 形参丢了类型标注；spawn 失败漏删 `.ps1`；`panelId`/`origin.pluginId` 无测试钉住 | `Object.hasOwn` 分发 + `@param` 标注 + ps1 补删 + fakeCtx 带 pluginId 断言 panelId 与 origin |
+| P2 SDK 可命名性 | `PluginMessageOrigin`/`PluginUIQuestion`/`PluginUIQuestionnaireResult` 不随 `export *` 出来 | plugin-sdk.d.ts 显式转出 |
+| 文档漂移 | §14.3 旧词表未标注被 §25 取代；§20.2 代码片段空串被吃；§26 行数/模块数过期；审查报告行号是拆分前的；`settings[]` 无字段表；`display:false` 承诺与契约不符 | 全部回填（plugin-host-api.md 新增 §1.2 settings 字段表、engines 语义与 prerelease 边界、修正 display 说法） |
+
+### 已知但未修（记录在案）
+
+- semver prerelease 标识符按整串字符串比较（`beta.10` < `beta.2` 判反）：文件头已声明边界；
+- 宿主 `pluginDirVersion()` 不跟 symlink、版本可能回退撞历史 `?v=`：加固项；
+- `sdk-runtime-changed` 广播仍有两处手写循环未换 `broadcastEvent`；
+- UI `api()` 无超时（宿主丢包时面板 Promise 永挂）、`cachedBash` 负缓存不随 dispose、
+  `pendingDeletes` 重试预算是全局不是 per-file：均待下次顺手。

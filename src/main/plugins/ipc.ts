@@ -48,41 +48,47 @@ export function registerPluginHandlers(): void {
   registerHandler('ipc:plugins.catalog', async () => {
     const plugins = discoverPlugins()
     return {
-      plugins: plugins.map((p) => ({
-        id: p.manifest?.id ?? '',
-        name: p.manifest?.name ?? p.dir,
-        version: p.manifest?.version ?? '',
-        description: p.manifest?.description ?? '',
-        icon: p.manifest?.icon ?? '',
-        enabled: p.enabled,
-        error: p.error,
-        source: p.source,
-        dir: p.dir,
-        // 中央视图贡献点：侧栏入口与中央面板都由 renderer 按此渲染
-        views: (p.manifest?.views ?? []).map((v) => ({
-          id: v.id,
-          title: v.title,
-          description: v.description ?? '',
-          icon: v.icon ?? p.manifest?.icon ?? '',
-          entry: v.entry,
-        })),
-        panels: (p.manifest?.panels ?? []).map((panel) => ({ id: panel.id, title: panel.title })),
-        /** 会话条：对话顶部的一条插件 UI，宿主只给位置与高度，显不显示由插件自己判断 */
-        sessionBars: (p.manifest?.sessionBars ?? []).map((bar) => ({
-          id: bar.id,
-          title: bar.title,
-          entry: bar.entry,
-          height: bar.height,
-        })),
-        /** 会话级工具：参数 schema 不下发（大且 renderer 用不到），只给名字与工具卡 */
-        tools: (p.manifest?.tools ?? []).map((tool) => ({
-          name: tool.name,
-          label: tool.label,
-          card: tool.card ?? null,
-        })),
-        /** 声明式设置项（只有 schema，值另取，避免目录被人人拉一遍全量设置） */
-        settings: p.manifest?.settings ?? [],
-      })),
+      plugins: plugins.map((p) => {
+        // engines 拒载时 manifest 为空但 blockedManifest 保留：设置页要能显示
+        // 这行插件是谁、为什么没加载，而不是让它无声消失
+        const m = p.manifest ?? p.blockedManifest
+        return {
+          id: m?.id ?? '',
+          name: m?.name ?? p.dir,
+          version: m?.version ?? '',
+          description: m?.description ?? '',
+          icon: m?.icon ?? '',
+          enabled: p.enabled,
+          error: p.error,
+          errorKind: p.errorKind,
+          source: p.source,
+          dir: p.dir,
+          // 中央视图贡献点：侧栏入口与中央面板都由 renderer 按此渲染
+          views: (m?.views ?? []).map((v) => ({
+            id: v.id,
+            title: v.title,
+            description: v.description ?? '',
+            icon: v.icon ?? m?.icon ?? '',
+            entry: v.entry,
+          })),
+          panels: (m?.panels ?? []).map((panel) => ({ id: panel.id, title: panel.title })),
+          /** 会话条：对话顶部的一条插件 UI，宿主只给位置与高度，显不显示由插件自己判断 */
+          sessionBars: (m?.sessionBars ?? []).map((bar) => ({
+            id: bar.id,
+            title: bar.title,
+            entry: bar.entry,
+            height: bar.height,
+          })),
+          /** 会话级工具：参数 schema 不下发（大且 renderer 用不到），只给名字与工具卡 */
+          tools: (m?.tools ?? []).map((tool) => ({
+            name: tool.name,
+            label: tool.label,
+            card: tool.card ?? null,
+          })),
+          /** 声明式设置项（只有 schema，值另取，避免目录被人人拉一遍全量设置） */
+          settings: m?.settings ?? [],
+        }
+      }),
     }
   })
 

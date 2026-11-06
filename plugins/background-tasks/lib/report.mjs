@@ -195,6 +195,8 @@ export function buildReport(items, skipped) {
 }
 
 export async function deliver(sessionFile, items, skipped) {
+  // 停用后的漏网投递不得再发：rt.ctx 已被 deactivate 置空，这条是第二道闸
+  if (!rt.ctx) return
   // 二次校验：从入队到真正投递之间，这条记录可能已经被删除/清理了。
   // 投一条「bg-14 已失败」而 bg-14 早已不存在，用户只会去查一个空 id。
   // 按 id 比对而不是对象引用：插件重载后 state 里的对象可能被重建过。

@@ -35,6 +35,8 @@ type PluginRow = {
   icon?: string
   enabled: boolean
   error?: string
+  /** error 归类：manifest = 清单校验失败；engines = 宿主版本不满足（清单本身有效） */
+  errorKind?: 'manifest' | 'engines'
   source: 'builtin' | 'user'
   dir: string
   views: { id: string; title: string; description?: string }[]
@@ -347,7 +349,10 @@ export function PluginsSettings() {
 
         {selected.error && (
           <div className="mb-4 rounded-lg border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-            {t('settings:plugins.invalidManifest')}: {selected.error}
+            {selected.errorKind === 'engines'
+              ? t('settings:plugins.enginesReason')
+              : t('settings:plugins.invalidManifest')}
+            : {selected.error}
           </div>
         )}
 
@@ -538,7 +543,9 @@ export function PluginsSettings() {
                       )}
                       {row.error && (
                         <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-2xs text-destructive">
-                          {t('settings:plugins.invalidBadge')}
+                          {row.errorKind === 'engines'
+                            ? t('settings:plugins.enginesBadge')
+                            : t('settings:plugins.invalidBadge')}
                         </span>
                       )}
                       {!row.enabled && (

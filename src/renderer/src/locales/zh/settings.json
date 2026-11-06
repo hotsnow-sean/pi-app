@@ -1200,6 +1200,8 @@
     "sourceUser": "已安装",
     "disabledBadge": "已停用",
     "invalidBadge": "清单有误",
+    "enginesBadge": "版本不满足",
+    "enginesReason": "宿主版本不满足 engines 声明",
     "invalidManifest": "清单校验失败",
     "settingsCount": "{{count}} 项设置",
     "toggleFailed": "切换失败：{{error}}",

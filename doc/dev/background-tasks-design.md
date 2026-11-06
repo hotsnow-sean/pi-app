@@ -552,8 +552,12 @@ type BgTask = {
 
 ### 14.3 契约只留必要的自由度
 
-`summary / detail / tone / rows / panelId`。行的 `status` 决定图标，`action: 'stop'` 决定有没有停止按钮，
-`startedAt` 给了就**由宿主现算耗时**——插件推一次的「12s」会永远停在 12s，属于会骗人的界面。
+> ⚠️ 本节写作时的行状态词表（`status` 决定图标、`action: 'stop'`）**已被 §25 的观感词表
+> 取代**：现在是 `state`（active/ok/error/idle/warn）+ `actions[]`（`{id,icon?,title?}`），
+> 宿主不认识 running/lost 这类业务词。本节保留的是历史决策过程，字段名以 §25 为准。
+
+`summary / detail / tone / rows / panelId`。`startedAt` 给了就**由宿主现算耗时**——
+插件推一次的「12s」会永远停在 12s，属于会骗人的界面。
 点行走 `composerBarAction({ action: 'select' | 'stop', id })` 回调，宿主不解释业务语义。
 
 刻意不做的事：不支持自定义 HTML/版式。托盘是摘要，不是第二个面板；要富交互去右栏。
@@ -885,12 +889,12 @@ stores + composer 回归 41 文件 237 条全过。
 `ui/app.js` 的 `tick()` 用签名对比避免整表重建：
 
 ```js
-const signature = visible.map(t => `${t.id}:${t.status}:${t.report}`).join(,)
+const signature = visible.map(t => `${t.id}:${t.status}:${t.report}`).join(',')
 if (signature !== lastSignature) { lastSignature = signature; rebuild() } else updateMeta()
 ```
 
-而各处「动作之后强制下一拍重绘」都是 `lastSignature = `。列表清空后
-`signature` 恰好也是 `` —— 两个 `` 相等，`tick()` 认为「没变化」，
+而各处「动作之后强制下一拍重绘」都是 `lastSignature = ''`。列表清空后
+`signature` 恰好也是 `''` —— 两个 `''` 相等，`tick()` 认为「没变化」，
 `updateMeta()` 在旧 DOM 上跑一遍，列表就冻在那儿。`remove` 删掉最后一条时
 同理（只是没人注意到）。
 
@@ -1130,7 +1134,7 @@ row.action?: 'stop'
 - 插件侧 bar 用例改按新词表断言（`tone:'active'` / `row.state` / `row.actions`）。
 - 插件版本 → **v0.7.0**（托盘载荷是破坏性变更，内置插件与宿主同步发）。
 
-## 26. main.mjs 拆模块（审查 3.1）：1732 行 → 薄入口 + 10 个 lib
+## 26. main.mjs 拆模块（审查 3.1）：1732 行 → 薄入口 + 11 个 lib
 
 审查报告（`review-plugin-host-2026-11-06.md` §3.1）指出 main.mjs 七种职责挤一个文件。
 拆分原则：**只搬家，不重写**——函数体逐字搬移，保持 diff 可审；行为零变化，
@@ -1177,9 +1181,11 @@ deactivate 从「清 8 个模块级变量」变成 3 个 dispose 调用。
 
 ### 26.4 行数
 
-main.mjs 120；lib：runtime 32 / store 82 / format 92 / compose-bar 100 / files 107 /
-log-io 140 / shell 163 / methods 230 / report 250 / tasks 329 / tools 333。
-最大单文件 333 行，单一职责。
+> 行数随批次推进有波动，此为复审修复后（2026-11-06）的快照。
+
+main.mjs 127；lib：runtime 38 / store 99 / format 92 / compose-bar 102 / files 107 /
+log-io 141 / shell 163 / methods 234 / report 252 / tasks 357 / tools 333。
+最大单文件 357 行，单一职责。
 
 ### 26.5 已知边界
 

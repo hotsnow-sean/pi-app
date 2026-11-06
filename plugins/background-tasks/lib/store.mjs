@@ -29,9 +29,19 @@ export function loadSettings() {
   }
 }
 
+/**
+ * 读任务表。返回「读到了一份本插件写过的表」：
+ * false = 首次启动或读失败（宿主 readStorage 是 fail open，文件损坏时静默返回 {}）。
+ * 调用方（activate）据此决定要不要扫孤儿文件——把损坏后的空表当真，
+ * sweepOrphanFiles 会把有主日志全当孤儿删掉，不可恢复（复审 P1）。
+ */
 export function load() {
   try {
     const data = rt.ctx.storage.get() ?? {}
+    // save() 永远写 seq 与 tasks，两个字段任一存在才算「本插件写过的表」；
+    // 首次启动（还没写过）本来也没有孤儿可扫，跳过无害
+    const usable =
+      data !== null && typeof data === 'object' && (data.seq !== undefined || Array.isArray(data.tasks))
     rt.state = {
       seq: Number(data.seq) || 0,
       tasks: Array.isArray(data.tasks)
@@ -42,12 +52,19 @@ export function load() {
             .map((t) => (t.report === 'sent' ? { ...t, report: 'queued' } : t))
         : [],
     }
-  } catch {
+    if (!usable) rt.ctx?.log?.('storage looks empty or unreadable, orphan sweep will be skipped')
+    return usable
+  } catch (error) {
     rt.state = { seq: 0, tasks: [] }
+    rt.ctx?.log?.('storage load failed, orphan sweep will be skipped', error)
+    return false
   }
 }
 
 export function save() {
+  // 停用后旧代回调（disposeTasks 摘监听之外的第二道闸）不得再写盘：
+  // storage.set 是整份覆盖，会把新代刚写好的任务表抹掉
+  if (!rt.ctx) return
   try {
     rt.ctx.storage.set({
       seq: rt.state.seq,

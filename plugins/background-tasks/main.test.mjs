@@ -26,6 +26,7 @@ function fakeCtx(reuseStorage) {
   let stored = reuseStorage ?? {}
   return {
     dataDir,
+    pluginId: 'bg-test',
     storage: {
       get: () => stored,
       set: (value) => {
@@ -302,6 +303,9 @@ describe('composer bar', () => {
 
     const last = bars.filter((b) => b.sessionFile === 'C:/w/a/sess-1.jsonl').at(-1)
     expect(last.bar.tone).toBe('active')
+    // panelId 必须跟 ctx.pluginId 走（runtime 的 PLUGIN_ID 常量只是测试兜底）：
+    // manifest 改 id 而托盘还在推旧 id，宿主就打不开面板
+    expect(last.bar.panelId).toBe('plugin:bg-test:tasks')
     const ids = last.bar.rows.map((r) => r.id)
     expect(ids).toContain(mine.details.id)
     expect(ids).not.toContain(other.details.id)
@@ -566,6 +570,24 @@ describe('structured output', () => {
       expect(out.details.chunkBytes, `tailLines=${want}`).toBeLessThan(out.details.totalBytes)
     }
   }, 60_000)
+
+  it('defaults to the tail 20 lines when tailLines is omitted', async () => {
+    // 拆模块回归（复审 P0）：REPORT_TAIL_LINES 忘了 export，tools 解构拿到 undefined，
+    // 尾部截取整段被跳过——省略 tailLines 变成「从头读全文」。manifest 承诺
+    // "Call it with only an id to get the tail"，这条钉住默认值真的生效。
+    const res = await start({ command: 'for i in $(seq 1 120); do echo "line $i"; done' })
+    const task = await waitDone(res.details.id)
+    const out = await handle.invoke('tool.execute', {
+      name: 'bg_output',
+      args: { id: task.id, format: 'json' },
+      sessionFile: 's1.jsonl',
+    })
+    const lines = out.details.chunk.split('\n')
+    expect(lines.length).toBe(20)
+    expect(lines[0]).toBe('line 101')
+    expect(lines.at(-1)).toBe('line 120')
+    expect(out.details.truncated).toBe(true)
+  }, 60_000)
 })
 
 describe('delivery semantics (v0.6.0)', () => {
@@ -576,6 +598,8 @@ describe('delivery semantics (v0.6.0)', () => {
     await new Promise((resolve) => setTimeout(resolve, 1_000))
     expect(sent).toHaveLength(1)
     expect(sent[0].deliverAs).toBe('steer')
+    // 回报的 origin 也要跟 ctx.pluginId 走：宿主按它路由插件消息的归属
+    expect(sent[0].origin.pluginId).toBe('bg-test')
   }, 30_000)
 
   it('tailors the directive to the batch: failure gets an action prompt', async () => {
@@ -785,5 +809,56 @@ describe("report delivery failure (review P2-3)", () => {
     } finally {
       await deactivate()
     }
+  }, 30_000)
+})
+
+describe("storage safety (review re-run)", () => {
+  it("keeps owned logs when the task table cannot be read", async () => {
+    // 复审 P1：宿主 readStorage 是 fail open，读失败时插件拿到的是一份「合法空表」——
+    // 若照旧扫孤儿，磁盘上有主的日志会被全数删光且不可恢复。现在 load() 认不出
+    // 「本插件写过的表」就跳过 sweep，这里钉住两条路：get 抛错、get 返回 {}。
+    const res = await start({ command: "echo kept", label: "有主日志" })
+    const task = await waitDone(res.details.id)
+    await deactivate()
+
+    const logsDir = path.join(dataDir, "logs")
+    expect(fs.readdirSync(logsDir)).toContain(`${task.id}.log`)
+
+    // 路 1：storage.get 直接抛错
+    const brokenCtx = fakeCtx()
+    brokenCtx.storage.get = () => {
+      throw new Error("disk gone")
+    }
+    handle = await activate(brokenCtx)
+    expect(fs.readdirSync(logsDir)).toContain(`${task.id}.log`)
+    await deactivate()
+
+    // 路 2：get 返回 {}（损坏文件被宿主吞掉后的形状）
+    handle = await activate(fakeCtx())
+    expect(fs.readdirSync(logsDir)).toContain(`${task.id}.log`)
+    await deactivate()
+
+    // 对照组：表读得到（有 seq 的表、但没这条记录）时，真孤儿照样收——守卫不能把功能拦死
+    handle = await activate(fakeCtx({ seq: 9, tasks: [] }))
+    expect(fs.readdirSync(logsDir).filter((n) => /^bg-\d+\.log$/.test(n))).toEqual([])
+  }, 30_000)
+
+  it("does not wipe the stored table when recover runs against an unreadable table", async () => {
+    // recover() 只在确实动过表时才 save：读失败的一代里没有 running 任务，
+    // 不得用空表覆盖磁盘上还没读出来的记录
+    const res = await start({ command: "echo kept", label: "落盘对照" })
+    await waitDone(res.details.id)
+    const snapshot = JSON.parse(JSON.stringify(currentStorage))
+    await deactivate()
+
+    const brokenCtx = fakeCtx()
+    brokenCtx.storage.get = () => {
+      throw new Error("disk gone")
+    }
+    handle = await activate(brokenCtx)
+    await deactivate()
+
+    expect(currentStorage.seq).toBe(snapshot.seq)
+    expect(currentStorage.tasks.map((t) => t.id)).toEqual(snapshot.tasks.map((t) => t.id))
   }, 30_000)
 })

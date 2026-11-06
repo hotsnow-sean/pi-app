@@ -12,7 +12,8 @@ export const READ_CHUNK_MAX = 256 * 1024
 export const MIN_READ_BYTES = 64
 /** bg_output 的协作式等待上限：只等「有新输出」，不等终态 */
 export const MAX_OUTPUT_WAIT_MS = 30_000
-const REPORT_TAIL_LINES = 20
+/** bg_output / 回报不传 tailLines 时的默认尾部行数（tools 跨模块引用，必须导出） */
+export const REPORT_TAIL_LINES = 20
 const REPORT_MAX_CHARS = 8_000
 const COUNT_LINES_MAX_BYTES = 20 * 1024 * 1024
 

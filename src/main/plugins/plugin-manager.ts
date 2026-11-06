@@ -20,14 +20,19 @@ import { errorMessage } from '@shared/error-message'
  */
 
 export type DiscoveredPlugin = {
+  /** 合法清单；目录无 plugin.json / 清单校验失败时为 null */
   manifest: PluginManifest
+  /** 清单有效但被拒载（如 engines 不满足）时保留，供设置页展示插件身份 */
+  blockedManifest?: PluginManifest
   /** 插件根目录（绝对路径） */
   dir: string
   /** builtin = 随应用分发（含 PI_PLUGINS_DIR 覆盖，e2e 用）；user = 用户安装到 userData */
   source: PluginSource
   enabled: boolean
-  /** 非法清单等诊断信息（enabled=false 且不可激活） */
+  /** 不可激活的诊断信息（非法清单或 engines 不满足，进设置页） */
   error?: string
+  /** error 的归类：manifest = 清单本身有问题（此时无 manifest）；engines = 版本不满足（清单有效） */
+  errorKind?: 'manifest' | 'engines'
 }
 
 export type PluginSource = 'builtin' | 'user'
@@ -59,21 +64,30 @@ function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'>
   const manifestPath = path.join(dir, 'plugin.json')
   try {
     if (!fs.existsSync(manifestPath)) {
-      return { manifest: null as unknown as PluginManifest, dir, error: 'plugin.json not found' }
+      return {
+        manifest: null as unknown as PluginManifest,
+        dir,
+        error: 'plugin.json not found',
+        errorKind: 'manifest',
+      }
     }
     const raw: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
     const parsed = parsePluginManifest(raw)
     if (!parsed.ok) {
-      return { manifest: null as unknown as PluginManifest, dir, error: parsed.error }
+      return { manifest: null as unknown as PluginManifest, dir, error: parsed.error, errorKind: 'manifest' }
     }
     // engines 校验（P2-7）：声明了「需要 host ≥ x」就要真的有人管，
     // 否则这个字段只是作者的自我安慰。不满足 = 不可激活，进设置页的诊断信息。
+    // 清单本身是好的：保留 manifest（id/name/version 可用），设置页才能把
+    // 这行插件显示出来并写明原因，而不是让它无声消失（复审 P1）。
     const required = parsed.manifest.engines?.['pi-desktop']
     if (required && !satisfiesHostRange(app.getVersion(), required)) {
       return {
+        blockedManifest: parsed.manifest,
         manifest: null as unknown as PluginManifest,
         dir,
         error: `host version ${app.getVersion()} does not satisfy engines['pi-desktop'] = ${required}`,
+        errorKind: 'engines',
       }
     }
     return { manifest: parsed.manifest, dir }
@@ -82,6 +96,7 @@ function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'>
       manifest: null as unknown as PluginManifest,
       dir,
       error: error instanceof Error ? error.message : String(error),
+      errorKind: 'manifest',
     }
   }
 }
@@ -142,9 +157,10 @@ export function discoverPlugins(): DiscoveredPlugin[] {
         if (!entry.isDirectory()) continue
         const dir = path.join(root.dir, entry.name)
         const plugin = readManifest(dir)
-        // 同 id 先到先得（内置优先于 userData）
-        if (plugin.manifest && seen.has(plugin.manifest.id)) continue
-        if (plugin.manifest) seen.add(plugin.manifest.id)
+        // 同 id 先到先得（内置优先于 userData）；被拒载的插件也占住 id
+        const pluginId = plugin.manifest?.id ?? plugin.blockedManifest?.id
+        if (pluginId && seen.has(pluginId)) continue
+        if (pluginId) seen.add(pluginId)
         out.push({ ...plugin, source: root.source })
       }
     }
