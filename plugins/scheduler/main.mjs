@@ -1,407 +1,115 @@
 // @ts-check
 /// <reference path="../plugin-sdk.d.ts" />
 /**
- * 定时任务插件 — main 侧服务。
+ * 定时任务 — main 侧入口。
  *
- * 生命周期：activate(ctx) 启动调度循环；deactivate() 清理定时器。
- * 任务与执行历史存在插件隔离存储（ctx.storage），UI 通过 invoke() 调用本文件暴露的方法。
+ * 给用户「到点让 agent 自己跑一段活」的能力：一次 / 每天 / 每周 / 每月 / 间隔，
+ * 支持有效期、启停、立即运行、条件通知与运行历史。任务与历史都归插件自己管，
+ * 运行记录落在应用入口（`views[]`）——定时任务是全局调度，不属于任何一段对话。
  *
- * 调度语义：
- * - kind: once / daily / weekly / monthly / interval；time: 'HH:mm'；weekly.weekday(0=周日)；monthly.day(1-31，无该日顺延到存在该日的下月)；interval.everyMinutes(≥1)
- * - 触发：tick 每 5s；到点先推进 nextRunAt 再入队（防重复）
- * - 错过：once 任务错过（应用未运行）→ 启动时补跑一次；重复任务错过 → 顺延到下一个未来时刻，不补跑
- * - 并发：串行执行队列，同一时刻最多跑一个 agent prompt
+ * 契约：
+ *   invoke('tool.execute', { name, args, sessionFile, cwd }) → { text, details? }
+ *   invoke('snapshot' | 'listRuns' | 'getRun' | 'deleteRun' | 'saveTask' | 'deleteTask'
+ *          | 'setTaskEnabled' | 'runNow' | 'nextRunPreview' | 'markSeen')
+ *
+ * ── 多文件结构与热重载 ─────────────────────────────────────────────────────
+ *
+ * 本体拆在 lib/（runtime / format / schedule / task-input / store / runs / notify /
+ * engine / methods / tools），这里只保留激活流程与 invoke 分发。插件内的模块引用
+ * **一律走 imp() 动态加载并透传 ?v=**：静态 import 解析相对路径时会丢掉 query，
+ * 而宿主的热重载是把版本号编进入口 URL（按插件目录最大 mtime，见 plugin-host.ts 的
+ * pluginDirVersion）——不透传的话，改了 lib、没改 main 的热更会命中旧模块缓存，
+ * 新旧两代模块同进程并存。入口从 import.meta.url 拿到自己的 v，链条自然向下传。
+ *
+ * ⚠️ 规矩：lib/ 里禁止出现指向插件内文件的静态 import（node:fs 这类外部模块随意）。
  */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
-const TICK_MS = 5_000
-const MAX_RUNS = 200
-const GRACE_MS = 60_000
+// 版本参数从自己的 URL 上摘下来往下传；不用 new URL 做相对解析——
+// jsdom 测试环境会给 URL 构造器打补丁，相对解析会落到 document.baseURI 上
+const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : ''
+const imp = (name) => import(pathToFileURL(path.join(import.meta.dirname, 'lib', `${name}.mjs`)).href + Q)
 
-/** @type {import('../plugin-sdk').PluginContext} */
-let ctx
-let timer = null
-let state = { tasks: [], runs: [] }
-const queue = []
-let draining = false
+const { rt, resetRuntime, log, TICK_MS } = await imp('runtime')
+const { loadSettings, load } = await imp('store')
+const { recoverInterrupted, sweepSignals } = await imp('runs')
+const { tick, recoverMissed } = await imp('engine')
+const { methods } = await imp('methods')
+const { tools } = await imp('tools')
 
-/**
- * 声明式设置项（plugin.json 的 settings[]）的当前值。
- * 只读：写入口在设置的「插件」页，宿主写完会回调 onChange。
- */
-const SETTING_DEFAULTS = { notifyOnStart: true, defaultCwd: '', historyLimit: 30 }
-let settings = { ...SETTING_DEFAULTS }
-
-function loadSettings() {
-  try {
-    settings = { ...SETTING_DEFAULTS, ...(ctx.settings?.get?.() ?? {}) }
-  } catch {
-    settings = { ...SETTING_DEFAULTS }
-  }
+/** manifest 里的工具名 → tools 对象的键。名字是给模型看的，键是代码里的 */
+const TOOL_KEYS = {
+  sched_create: 'create',
+  sched_list: 'list',
+  sched_update: 'update',
+  sched_delete: 'remove',
+  sched_run_now: 'runNow',
+  sched_runs: 'runs',
 }
 
-// ---------- 存储 ----------
-
-function load() {
-  try {
-    const data = ctx.storage.get()
-    state = {
-      tasks: Array.isArray(data.tasks) ? data.tasks : [],
-      runs: Array.isArray(data.runs) ? data.runs : [],
-    }
-  } catch {
-    state = { tasks: [], runs: [] }
-  }
-}
-
-function save() {
-  ctx.storage.set(state)
-}
-
-// ---------- 时间计算 ----------
-
-function atTime(base, h, m) {
-  const d = new Date(base)
-  d.setHours(h, m, 0, 0)
-  return d
-}
-
-function nextDaily(from, h, m) {
-  const next = atTime(from, h, m)
-  if (next.getTime() <= from.getTime()) next.setDate(next.getDate() + 1)
-  return next.getTime()
-}
-
-function nextWeekly(from, h, m, weekday) {
-  const next = atTime(from, h, m)
-  let delta = (weekday - next.getDay() + 7) % 7
-  if (delta === 0 && next.getTime() <= from.getTime()) delta = 7
-  next.setDate(next.getDate() + delta)
-  return next.getTime()
-}
-
-function nextMonthly(from, h, m, day) {
-  const probe = new Date(from)
-  for (let i = 0; i < 48; i++) {
-    // 无该日的月份（如 2 月没有 30 号）取当月最后一天
-    const lastDay = new Date(probe.getFullYear(), probe.getMonth() + 1, 0).getDate()
-    const anchor = new Date(probe.getFullYear(), probe.getMonth(), Math.min(day, lastDay), h, m, 0, 0)
-    if (anchor.getTime() > from.getTime()) return anchor.getTime()
-    probe.setMonth(probe.getMonth() + 1)
-  }
-  // 48 个月都找不到（理论上不可能）——退回一个月后
-  return from.getTime() + 30 * 86_400_000
-}
-
-/** 计算某任务的下一个执行时刻；null = 不再执行（禁用 / once 已跑 / 超出有效期） */
-export function computeNextRun(task, from = new Date()) {
-  if (!task.enabled) return null
-  const [h, m] = String(task.schedule?.time || '09:00').split(':').map(Number)
-  let next
-  switch (task.schedule?.kind) {
-    case 'daily':
-      next = nextDaily(from, h, m)
-      break
-    case 'weekly':
-      next = nextWeekly(from, h, m, Number(task.schedule.weekday ?? 1))
-      break
-    case 'monthly':
-      next = nextMonthly(from, h, m, Number(task.schedule.day ?? 1))
-      break
-    case 'once':
-    default:
-      next = task.schedule?.at ? new Date(task.schedule.at).getTime() : null
-      if (next !== null && next <= from.getTime()) return null
-      break
-    case 'interval': {
-      const step = Math.max(1, Number(task.schedule?.everyMinutes) || 60) * 60_000
-      next = from.getTime() + step
-      break
-    }
-  }
-  if (next === null) return null
-  if (task.validUntil) {
-    const until = new Date(`${task.validUntil}T23:59:59`).getTime()
-    if (Number.isFinite(until) && next > until) return null
-  }
-  return next
-}
-
-function scheduleLabel(task) {
-  const s = task.schedule ?? {}
-  const time = s.time || '09:00'
-  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  switch (s.kind) {
-    case 'daily':
-      return `每天 ${time}`
-    case 'weekly':
-      return `每${weekdays[Number(s.weekday ?? 1)] ?? '周一'} ${time}`
-    case 'monthly':
-      return `每月 ${s.day ?? 1} 日 ${time}`
-    case 'once':
-      return s.at ? `一次 · ${new Date(s.at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '一次'
-    case 'interval': {
-      const mins = Math.max(1, Number(s.everyMinutes) || 60)
-      if (mins >= 60 && mins % 60 === 0) {
-        const h = mins / 60
-        return h === 1 ? '每小时' : `每隔 ${h} 小时`
-      }
-      return mins === 1 ? '每分钟' : `每隔 ${mins} 分钟`
-    }
-    default:
-      return time
-  }
-}
-
-// ---------- 调度 ----------
-
-function tick() {
-  try {
-    const now = Date.now()
-    let changed = false
-    for (const task of state.tasks) {
-      if (!task.enabled || task.nextRunAt === null || task.nextRunAt === undefined) continue
-      if (task.nextRunAt <= now) {
-        enqueue(task, false)
-        if (task.schedule?.kind === 'once') {
-          task.enabled = false
-          task.nextRunAt = null
-          task.done = true
-        } else {
-          task.nextRunAt = computeNextRun(task, new Date(now))
-        }
-        changed = true
-      }
-    }
-    if (changed) save()
-  } catch (error) {
-    ctx.log('tick failed:', error)
-  }
-}
-
-function recoverMissed() {
-  const now = Date.now()
-  for (const task of state.tasks) {
-    if (!task.enabled || task.nextRunAt === null || task.nextRunAt === undefined) continue
-    if (task.nextRunAt <= now - GRACE_MS) {
-      if (task.schedule?.kind === 'once') {
-        // once 错过 → 补跑
-        enqueue(task, true)
-        task.enabled = false
-        task.nextRunAt = null
-        task.done = true
-        ctx.log(`missed once task "${task.name}", running now`)
-      } else {
-        // 重复任务错过 → 顺延，不补跑
-        task.nextRunAt = computeNextRun(task, new Date(now))
-        ctx.log(`missed occurrence of "${task.name}", deferred to next slot`)
-      }
-    }
-  }
-  save()
-}
-
-function enqueue(task, missed) {
-  if (queue.some((q) => q.task.id === task.id)) return
-  queue.push({ task, missed })
-  void drain()
-}
-
-async function drain() {
-  if (draining) return
-  draining = true
-  try {
-    while (queue.length > 0) {
-      const { task, missed } = queue.shift()
-      await execute(task, missed)
-    }
-  } finally {
-    draining = false
-  }
-}
-
-async function execute(task, missed) {
-  const startedAt = Date.now()
-  if (settings.notifyOnStart !== false) {
-    ctx.notify(`定时任务：${task.name}`, missed ? '错过调度，正在补跑' : '任务开始执行')
-  }
-  let ok = false
-  let text = ''
-  let error = ''
-  try {
-    const result = await ctx.runAgentPrompt({
-      cwd: task.cwd || settings.defaultCwd || '',
-      prompt: task.prompt || '',
-      timeoutMs: 15 * 60_000,
-    })
-    if (result.ok) {
-      ok = true
-      text = result.text
-    } else {
-      // 用 `in` 而不是直接读 result.error：插件项目的 tsconfig 没开 strictNullChecks
-      // （无类型 JS 全开代价太大），该模式下 `ok` 的联合判别不生效，直接取会报
-      // 「Property 'error' does not exist」。`in` 收窄两种模式下都靠得住。
-      error = 'error' in result ? result.error : ''
-    }
-  } catch (e) {
-    error = String(e)
-  }
-  const run = {
-    id: `run-${startedAt}-${Math.random().toString(36).slice(2, 8)}`,
-    taskId: task.id,
-    taskName: task.name,
-    startedAt,
-    durationMs: Date.now() - startedAt,
-    missed: !!missed,
-    ok,
-    resultText: text ? String(text).slice(0, 20_000) : '',
-    error,
-  }
-  state.runs.unshift(run)
-  pruneRuns(task.id)
-  task.lastRunAt = startedAt
-  task.lastRunOk = ok
-  save()
-  ctx.notify(
-    `定时任务：${task.name}`,
-    ok ? `执行完成，用时 ${Math.round(run.durationMs / 1000)}s` : `执行失败：${error.slice(0, 120)}`,
-  )
-}
-
-/** 按设置里的 historyLimit 清理单个任务的旧记录；全局上限 MAX_RUNS 兜底 */
-function pruneRuns(taskId) {
-  const limit = Math.max(1, Math.round(Number(settings.historyLimit) || SETTING_DEFAULTS.historyLimit))
-  let seen = 0
-  const keep = []
-  for (const run of state.runs) {
-    if (run.taskId === taskId) {
-      seen += 1
-      if (seen > limit) continue
-    }
-    keep.push(run)
-  }
-  state.runs = keep.length > MAX_RUNS ? keep.slice(0, MAX_RUNS) : keep
-}
-
-// ---------- invoke 方法（UI 调用） ----------
-
-function publicTask(t) {
-  return {
-    id: t.id,
-    name: t.name,
-    prompt: t.prompt,
-    schedule: t.schedule,
-    scheduleLabel: scheduleLabel(t),
-    cwd: t.cwd || '',
-    validUntil: t.validUntil || null,
-    enabled: !!t.enabled,
-    done: !!t.done,
-    nextRunAt: t.nextRunAt ?? null,
-    lastRunAt: t.lastRunAt ?? null,
-    lastRunOk: t.lastRunOk ?? null,
-    createdAt: t.createdAt,
-  }
-}
-
-const methods = {
-  async listTasks() {
-    return { tasks: state.tasks.map(publicTask), serverNow: Date.now() }
-  },
-  async saveTask({ task }) {
-    if (!task || typeof task !== 'object') throw new Error('task required')
-    const now = Date.now()
-    let saved = state.tasks.find((t) => t.id === task.id)
-    if (!saved) {
-      saved = { id: `task-${now}-${Math.random().toString(36).slice(2, 8)}`, createdAt: now }
-      state.tasks.push(saved)
-    }
-    saved.name = String(task.name || '').trim() || '未命名任务'
-    saved.prompt = String(task.prompt || '')
-    saved.schedule = {
-      kind: ['once', 'daily', 'weekly', 'monthly', 'interval'].includes(task.schedule?.kind) ? task.schedule.kind : 'daily',
-      time: /^\d{2}:\d{2}$/.test(task.schedule?.time ?? '') ? task.schedule.time : '09:00',
-      weekday: Number.isInteger(task.schedule?.weekday) ? task.schedule.weekday : 1,
-      day: Number.isInteger(task.schedule?.day) ? task.schedule.day : 1,
-      everyMinutes: Math.min(43_200, Math.max(1, Math.round(Number(task.schedule?.everyMinutes)) || 60)),
-      at: task.schedule?.kind === 'once' && task.schedule?.at ? String(task.schedule.at) : undefined,
-    }
-    saved.cwd = String(task.cwd || '').trim()
-    saved.validUntil = /^\d{4}-\d{2}-\d{2}$/.test(task.validUntil ?? '') ? task.validUntil : null
-    saved.enabled = task.enabled !== false
-    if (saved.schedule.kind === 'once') {
-      saved.schedule.at = saved.schedule.at || new Date(now + 5 * 60_000).toISOString()
-      // 创建/编辑时执行时刻已过：不补跑，直接视为已完成
-      if (new Date(saved.schedule.at).getTime() <= now) {
-        saved.enabled = false
-        saved.done = true
-        saved.nextRunAt = null
-        save()
-        return { task: publicTask(saved) }
-      }
-    }
-    saved.nextRunAt = saved.enabled ? computeNextRun(saved, new Date(now)) : null
-    saved.done = false
-    save()
-    return { task: publicTask(saved) }
-  },
-  async deleteTask({ id }) {
-    state.tasks = state.tasks.filter((t) => t.id !== id)
-    save()
-    return { ok: true }
-  },
-  async setTaskEnabled({ id, enabled }) {
-    const task = state.tasks.find((t) => t.id === id)
-    if (!task) throw new Error('task not found')
-    task.enabled = enabled !== false
-    task.nextRunAt = task.enabled ? computeNextRun(task) : null
-    save()
-    return { task: publicTask(task) }
-  },
-  async runNow({ id }) {
-    const task = state.tasks.find((t) => t.id === id)
-    if (!task) throw new Error('task not found')
-    enqueue(task, false)
-    return { ok: true }
-  },
-  async listRuns({ taskId, limit }) {
-    const cap = Math.min(Number(limit) || 50, MAX_RUNS)
-    const runs = (taskId ? state.runs.filter((r) => r.taskId === taskId) : state.runs).slice(0, cap)
-    return { runs }
-  },
-  async deleteRun({ id }) {
-    state.runs = state.runs.filter((r) => r.id !== id)
-    save()
-    return { ok: true }
-  },
-  async nextRunPreview({ schedule }) {
-    const probe = { enabled: true, schedule }
-    return { nextRunAt: computeNextRun(probe, new Date()) }
-  },
-}
-
-// ---------- 生命周期 ----------
-
+/** @param {import('../plugin-sdk').PluginContext} pluginContext */
 export async function activate(pluginContext) {
-  ctx = pluginContext
+  // 同一进程里可能多次激活（热重载、测试）：上一代的内存状态必须清干净
+  resetRuntime()
+  rt.gen += 1
+  rt.live = true
+  rt.ctx = pluginContext
+  rt.dataDir = pluginContext.dataDir || path.join(os.tmpdir(), 'pi-scheduler')
+  rt.runsFile = path.join(rt.dataDir, 'runs.jsonl')
+  rt.signalDir = path.join(rt.dataDir, 'signals')
+  try {
+    fs.mkdirSync(rt.signalDir, { recursive: true })
+  } catch (error) {
+    log('create signal dir failed', error)
+  }
+
   loadSettings()
-  // 设置页改完立即生效，不必重启插件；回调里重新读取以拿到合并后的完整值
-  ctx.settings?.onChange?.((values) => {
-    settings = { ...SETTING_DEFAULTS, ...(values ?? {}) }
-    ctx.log('settings updated', settings)
+  // 设置页改完立即生效，不必重启插件；回调里整体替换以拿到宿主合并后的完整值
+  pluginContext.settings?.onChange?.((values) => {
+    rt.settings = { ...rt.settings, ...(values ?? {}) }
+    log('settings updated', rt.settings)
   })
+
   load()
+  // 上次进程停在 queued/running 的记录先改成 interrupted，再判断补跑
+  recoverInterrupted()
+  sweepSignals()
   recoverMissed()
-  timer = setInterval(tick, TICK_MS)
-  ctx.log(`scheduler active, ${state.tasks.length} task(s)`)
+
+  rt.timer = setInterval(tick, TICK_MS)
+  log(`scheduler active, ${rt.state.tasks.length} task(s), ${rt.runs.size} run(s), data ${rt.dataDir}`)
+
   return {
     async invoke(method, params) {
-      const fn = methods[method]
-      if (!fn) throw new Error(`unknown method: ${method}`)
-      return fn(params ?? {})
+      if (method === 'tool.execute') {
+        const { name, args, sessionFile, cwd } = params ?? {}
+        const key = Object.hasOwn(TOOL_KEYS, String(name || '')) ? TOOL_KEYS[String(name || '')] : null
+        // hasOwn 防原型链：'constructor' 这类名字不该被当成可用工具
+        const fn = key && Object.hasOwn(tools, key) ? tools[key] : null
+        if (!fn) return { text: `unknown tool: ${name}`, isError: true }
+        try {
+          return await fn(args ?? {}, { sessionFile: String(sessionFile || ''), cwd: String(cwd || '') })
+        } catch (error) {
+          return { text: `${name} failed: ${error?.message ?? error}`, isError: true }
+        }
+      }
+      const handler = Object.hasOwn(methods, method) ? methods[method] : null
+      if (!handler) throw new Error(`unknown method: ${method}`)
+      return handler(params ?? {})
     },
   }
 }
 
 export async function deactivate() {
-  if (timer) clearInterval(timer)
-  timer = null
+  rt.live = false
+  if (rt.timer) clearInterval(rt.timer)
+  rt.timer = null
+  // 换代：还在 runAgentPrompt 里等结果的旧一代返回后不再写盘/通知
+  rt.gen += 1
+  // 队列里的记录保持 queued 落盘状态，下次激活会被扫成 interrupted
+  rt.queue = []
+  rt.ctx = null
 }
