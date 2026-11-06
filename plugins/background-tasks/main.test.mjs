@@ -18,15 +18,20 @@ let sent = []
 let bars = []
 /** 插件注册的设置变更回调：测试里用它改 reportThresholdMs 等运行期设置 */
 let settingsChangeCb = null
+/** 最近一次 fakeCtx 的持久化存储：重启模拟（二次 activate）时复用 */
+let currentStorage = null
 
-function fakeCtx() {
-  let stored = {}
+function fakeCtx(reuseStorage) {
+  // let：save() 会整体替换 stored（const 会抛 TypeError）
+  let stored = reuseStorage ?? {}
   return {
     dataDir,
     storage: {
       get: () => stored,
       set: (value) => {
         stored = value
+        // save() 是整体替换而不是原地改：重启模拟要拿得到最新的一份
+        currentStorage = stored
       },
     },
     settings: {
@@ -563,5 +568,39 @@ describe('delivery semantics (v0.6.0)', () => {
     expect(sent).toHaveLength(1)
     expect(sent[0].content).toContain('仅供知晓')
     expect(sent[0].content).not.toContain('可能影响后续步骤')
+  }, 30_000)
+})
+
+describe('restart and wording (v0.6.1)', () => {
+  it('pushes composer bars for persisted sessions on activate', async () => {
+    // 重启后没有任何任务事件，托盘若只在事件时推送就永远不出现——
+    // 而面板里有列表，两边可见性必须一致
+    const res = await start({ command: 'exit 3', label: '重启可见' })
+    await waitDone(res.details.id)
+    await deactivate()
+    bars = []
+    handle = await activate(fakeCtx(currentStorage))
+    try {
+      expect(bars.length).toBeGreaterThan(0)
+      expect(JSON.stringify(bars)).toContain(res.details.id)
+    } finally {
+      await deactivate()
+    }
+  }, 30_000)
+
+  it('distinguishes running-skipped from missing ids in bg_clear', async () => {
+    // v6 实测：运行中被跳过的 id 被报成「id 不存在」，让人以为记错了 id
+    const running = await start({ command: 'sleep 30', label: '还在跑' })
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { ids: [running.details.id, 'bg-999'] },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.cleared).toBe(0)
+    expect(cleared.details.skippedRunning).toBe(1)
+    expect(cleared.details.missing).toEqual(['bg-999'])
+    expect(cleared.text).toContain('运行中任务已跳过')
+    expect(cleared.text).toContain('bg-999')
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } }).catch(() => {})
   }, 30_000)
 })
