@@ -204,11 +204,6 @@ export function pluginViewGlobalId(pluginId: string, viewId: string): string {
   return `plugin:${pluginId}:${viewId}`
 }
 
-/** 中央视图的 iframe 地址（pi-plugin:// 协议，见 main/plugins/protocol.ts） */
-export function pluginViewUrl(pluginId: string, entry: string): string {
-  return `pi-plugin://${pluginId}/${entry.replace(/^\/+/, '')}`
-}
-
 /** 侧栏/中央视图状态：对话（默认）或某个插件视图 */
 export type CenterView = { kind: 'chat' } | { kind: 'plugin'; pluginId: string; viewId: string }
 
@@ -224,7 +219,8 @@ export function pluginIdFromAdapterId(adapterId: string): string {
   return adapterId.slice('plugin:'.length)
 }
 
-/** 设置项默认值表（只含有 default 的键） */export function pluginSettingDefaults(fields: readonly PluginSettingField[]): Record<string, unknown> {
+/** 设置项默认值表（只含有 default 的键） */
+export function pluginSettingDefaults(fields: readonly PluginSettingField[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const field of fields) {
     if (field.default !== undefined) out[field.key] = field.default

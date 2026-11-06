@@ -1,8 +1,9 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Notification, app } from 'electron'
-import { findPlugin, setPluginEnabled } from './plugin-manager'
+import { discoverPlugins, findPlugin, setPluginEnabled } from './plugin-manager'
 import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import { askInHost, cancelPluginUIRequests } from './plugin-ui'
 import { clearPluginComposerBars, publishPluginComposerBar } from './plugin-composer-bar'
@@ -24,6 +25,7 @@ import type { PluginManifest } from '@shared/plugin-manifest'
 import type { PluginUIQuestion, PluginUIQuestionnaireResult } from '@shared/plugin-ui'
 import { errorMessage } from '@shared/error-message'
 import { pushPluginInbox } from '../completion-notification'
+import { runPromptWithTimeout } from './plugin-agent-prompt'
 
 /**
  * 插件 main 侧宿主：动态加载 main.mjs，注入受控 API（ctx），转发 invoke。
@@ -63,20 +65,37 @@ function pluginDataDir(pluginId: string): string {
   return path.join(app.getPath('userData'), 'plugin-data', pluginId)
 }
 
+/**
+ * 读插件自己的 data.json。
+ *
+ * 解析失败时**先把坏文件改名留证**再返回空：宿主是 fail-open（读不出来就当空表），
+ * 而插件下一次 `storage.set()` 会整份覆盖——不留备份的话，一次半截写盘就能把用户的
+ * 任务表永久抹掉，连「原本长什么样」都查不到。
+ */
 function readStorage(pluginId: string): Record<string, unknown> {
+  const file = path.join(pluginDataDir(pluginId), 'data.json')
   try {
-    const file = path.join(pluginDataDir(pluginId), 'data.json')
     if (!fs.existsSync(file)) return {}
     return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>
-  } catch {
+  } catch (error) {
+    console.warn(`[plugin:${pluginId}] data.json unreadable:`, error)
+    try {
+      fs.renameSync(file, `${file}.corrupt-${Date.now()}`)
+    } catch {
+      /* 改名也失败就算了，至少别在这里抛 */
+    }
     return {}
   }
 }
 
+/** 原子写：先落 .tmp 再 rename，避免半个 JSON 留在正式文件名上 */
 function writeStorage(pluginId: string, data: Record<string, unknown>): void {
   const dir = pluginDataDir(pluginId)
+  const file = path.join(dir, 'data.json')
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(data, null, 2))
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
+  fs.renameSync(tmp, file)
 }
 
 async function runAgentPrompt(opts: PluginAgentPromptSpec): Promise<PluginAgentPromptResult> {
@@ -89,19 +108,8 @@ async function runAgentPrompt(opts: PluginAgentPromptSpec): Promise<PluginAgentP
       sessionManager: pi.SessionManager.inMemory(),
     })
     session = created.session
-    // PromptOptions 无 signal：超时通过 abort() 中止，prompt 随之返回；race 兜底
-    const timer = setTimeout(() => void session?.abort(), timeoutMs)
-    try {
-      await Promise.race([
-        session.prompt(opts.prompt),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`prompt timed out after ${Math.round(timeoutMs / 60_000)} min`)), timeoutMs + 30_000),
-        ),
-      ])
-      return { ok: true, text: session.getLastAssistantText() ?? '' }
-    } finally {
-      clearTimeout(timer)
-    }
+    // 超时语义（含「abort 不抛错」这个坑）在 plugin-agent-prompt.ts，那里有单测
+    return await runPromptWithTimeout(session, opts.prompt, timeoutMs)
   } catch (error) {
     return { ok: false, error: errorMessage(error) }
   } finally {
@@ -333,9 +341,11 @@ export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; e
     // 版本取目录最大 mtime（见 pluginDirVersion），入口把自己的 ?v= 透传给
     // 子模块后，「停用 → 启用」就能让整个插件目录都拿到新模块，不必重启应用。
     const version = pluginDirVersion(found.dir)
-    const mod = (await dynamicImport(
-      `file://${entryPath.split(path.sep).join('/')}?v=${version}`,
-    )) as PluginModule
+    // 用 pathToFileURL 而不是手拼 `file://` + 分隔符替换：插件目录来自用户
+    // userData（可能是 `C:\Users\张三\...`），路径里出现 `#`/`?` 时手拼的串会被
+    // URL 解析成 fragment/query，import 直接找不到文件。pathToFileURL 负责转义。
+    const url = `${pathToFileURL(entryPath).href}?v=${version}`
+    const mod = (await dynamicImport(url)) as PluginModule
     const ctx = buildContext(pluginId, disposers)
     // 插件可以只做副作用（定时器、订阅）而不返回 invoke，所以 `?? {}` 是正当的
     const instance = (await mod.activate?.(ctx)) ?? {}
@@ -396,7 +406,6 @@ export async function applyPluginEnabled(pluginId: string, enabled: boolean): Pr
 
 /** 启动时激活所有 enabled 插件（逐个隔离失败） */
 export async function activateEnabledPlugins(): Promise<void> {
-  const { discoverPlugins } = await import('./plugin-manager')
   for (const plugin of discoverPlugins()) {
     if (!plugin.manifest || !plugin.enabled) continue
     const r = await activatePlugin(plugin.manifest.id)

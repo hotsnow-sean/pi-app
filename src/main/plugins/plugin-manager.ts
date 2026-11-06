@@ -19,21 +19,26 @@ import { errorMessage } from '@shared/error-message'
  * 启用状态持久化在 configStore.pluginEnabled（缺省 = 启用）。
  */
 
-export type DiscoveredPlugin = {
-  /** 合法清单；目录无 plugin.json / 清单校验失败时为 null */
-  manifest: PluginManifest
-  /** 清单有效但被拒载（如 engines 不满足）时保留，供设置页展示插件身份 */
-  blockedManifest?: PluginManifest
-  /** 插件根目录（绝对路径） */
-  dir: string
+/**
+ * 目录扫描结果。
+ *
+ * `manifest` 是判别式的：合法时非空，不可激活时**就是 null**（而不是「声明成非空、
+ * 用 `null as unknown as` 蒙过编译器」——那样每个消费者都得靠猜）。不可激活时若有
+ * 解析成功的清单，它落在 `blockedManifest`，只为设置页能显示「这行插件是谁、为什么
+ * 没加载」。
+ */
+type ManifestRead = { dir: string; error?: string; errorKind?: 'manifest' | 'engines' } & (
+  | { manifest: PluginManifest; blockedManifest?: undefined }
+  | { manifest: null; blockedManifest?: PluginManifest }
+)
+
+/** 目录里读出来的东西（不含启停状态：那是 configStore 的事，现算） */
+type DiscoveredBase = ManifestRead & {
   /** builtin = 随应用分发（含 PI_PLUGINS_DIR 覆盖，e2e 用）；user = 用户安装到 userData */
   source: PluginSource
-  enabled: boolean
-  /** 不可激活的诊断信息（非法清单或 engines 不满足，进设置页） */
-  error?: string
-  /** error 的归类：manifest = 清单本身有问题（此时无 manifest）；engines = 版本不满足（清单有效） */
-  errorKind?: 'manifest' | 'engines'
 }
+
+export type DiscoveredPlugin = DiscoveredBase & { enabled: boolean }
 
 export type PluginSource = 'builtin' | 'user'
 
@@ -60,21 +65,16 @@ function pluginRoots(): PluginRoot[] {
   return roots
 }
 
-function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'> {
+function readManifest(dir: string): ManifestRead {
   const manifestPath = path.join(dir, 'plugin.json')
   try {
     if (!fs.existsSync(manifestPath)) {
-      return {
-        manifest: null as unknown as PluginManifest,
-        dir,
-        error: 'plugin.json not found',
-        errorKind: 'manifest',
-      }
+      return { manifest: null, dir, error: 'plugin.json not found', errorKind: 'manifest' }
     }
     const raw: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
     const parsed = parsePluginManifest(raw)
     if (!parsed.ok) {
-      return { manifest: null as unknown as PluginManifest, dir, error: parsed.error, errorKind: 'manifest' }
+      return { manifest: null, dir, error: parsed.error, errorKind: 'manifest' }
     }
     // engines 校验（P2-7）：声明了「需要 host ≥ x」就要真的有人管，
     // 否则这个字段只是作者的自我安慰。不满足 = 不可激活，进设置页的诊断信息。
@@ -84,7 +84,7 @@ function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'>
     if (required && !satisfiesHostRange(app.getVersion(), required)) {
       return {
         blockedManifest: parsed.manifest,
-        manifest: null as unknown as PluginManifest,
+        manifest: null,
         dir,
         error: `host version ${app.getVersion()} does not satisfy engines['pi-desktop'] = ${required}`,
         errorKind: 'engines',
@@ -93,7 +93,7 @@ function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'>
     return { manifest: parsed.manifest, dir }
   } catch (error) {
     return {
-      manifest: null as unknown as PluginManifest,
+      manifest: null,
       dir,
       error: error instanceof Error ? error.message : String(error),
       errorKind: 'manifest',
@@ -114,8 +114,8 @@ function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'>
 type CacheEntry = {
   /** 缓存键：各根目录的 `dir\0mtimeMs` 串 */
   key: string
-  /** 不含 enabled 的目录结果（enabled 现算） */
-  plugins: Array<Omit<DiscoveredPlugin, 'enabled'>>
+  /** 不含 enabled 的目录结果（enabled 现算）。保持判别式联合，别用 Omit 把它拍平 */
+  plugins: DiscoveredBase[]
   /** 每次重建 +1：派生结果（工具描述符等）用它做缓存键 */
   version: number
 }
@@ -144,7 +144,7 @@ export function discoverPlugins(): DiscoveredPlugin[] {
   const key = discoveryKey()
   if (key === null) return []
   if (!cache || cache.key !== key) {
-    const out: Array<Omit<DiscoveredPlugin, 'enabled'>> = []
+    const out: DiscoveredBase[] = []
     const seen = new Set<string>()
     for (const root of pluginRoots()) {
       let entries: fs.Dirent[]
@@ -166,10 +166,13 @@ export function discoverPlugins(): DiscoveredPlugin[] {
     }
     cache = { key, plugins: out, version: (cache?.version ?? 0) + 1 }
   }
-  return cache.plugins.map((p) => ({
-    ...p,
-    enabled: p.manifest ? configStore.get('pluginEnabled')[p.manifest.id] !== false : false,
-  }))
+  // 分开写而不是 `{...p, enabled: p.manifest ? ... : false}`：spread 一个联合会把两侧
+  // 属性求并集，判别关系丢掉，manifest 又变回 `PluginManifest | null`
+  return cache.plugins.map((p) =>
+    p.manifest
+      ? { ...p, enabled: configStore.get('pluginEnabled')[p.manifest.id] !== false }
+      : { ...p, enabled: false },
+  )
 }
 
 export function findPlugin(pluginId: string): DiscoveredPlugin | null {

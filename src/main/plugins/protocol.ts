@@ -1,5 +1,5 @@
-import { app, net, protocol } from 'electron'
-import path from 'node:path'
+import { protocol } from 'electron'
+import { PLUGIN_UI_SCHEME, pluginEntryPath } from '@shared/plugin-panel-url'
 import { readPluginPanelFile, resolvePluginPanelEntry } from './plugin-host'
 
 /**
@@ -9,25 +9,24 @@ import { readPluginPanelFile, resolvePluginPanelEntry } from './plugin-host'
  * 必须在 app ready 之前注册为 standard + secure + supportFetchAPI scheme。
  */
 
-const SCHEME = 'pi-plugin'
-
 export function registerPluginProtocolScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {
-      scheme: SCHEME,
+      scheme: PLUGIN_UI_SCHEME,
       privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },
     },
   ])
 }
 
 export function registerPluginProtocolHandler(): void {
-  protocol.handle(SCHEME, async (request) => {
+  protocol.handle(PLUGIN_UI_SCHEME, async (request) => {
     try {
       const url = new URL(request.url)
       // standard scheme：host = pluginId，pathname = /path
       const pluginId = url.hostname
       if (!pluginId) return new Response('missing plugin id', { status: 400 })
-      const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html'
+      // 与 pluginEntryUrl 共用同一份前缀规则（见 @shared/plugin-panel-url）
+      const rel = pluginEntryPath(url.pathname)
       const full = resolvePluginPanelEntry(pluginId, rel)
       if (!full) return new Response('not found', { status: 404 })
       const file = await readPluginPanelFile(full)
@@ -46,9 +45,4 @@ export function registerPluginProtocolHandler(): void {
       return new Response('internal error', { status: 500 })
     }
   })
-}
-
-export function pluginPanelUrl(pluginId: string, entry: string): string {
-  const normalized = entry.replace(/^\//, '')
-  return `${SCHEME}://${pluginId}/${normalized}`
 }
