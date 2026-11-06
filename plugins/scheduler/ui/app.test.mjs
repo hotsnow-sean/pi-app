@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { installFakeBridge } from '../../../scripts/test-utils/fake-bridge.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'app.js'), 'utf8')
@@ -207,6 +208,8 @@ beforeEach(() => {
   // 轮询不是这组用例的对象；关掉它，所有重绘都由动作驱动
   window.setInterval = () => 0
   isolateListeners()
+  // 桥由宿主下发，UI 只认 window.pi；这里装一个替身（真桥有独立单测）
+  installFakeBridge()
   installHost()
 })
 

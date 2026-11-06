@@ -1,54 +1,30 @@
-/* 提问台 UI：agent 问过什么、你答了什么。数据全部来自 main 侧（invoke 桥）。 */
+/* 提问台 UI：agent 问过什么、你答了什么。数据全部来自 main 侧（window.pi.invoke）。 */
 
-// ---------- invoke 桥 ----------
+// ---------- 与宿主的通道 ----------
+// 桥由宿主下发（pi-plugin://__host/bridge.js）：握手、主题落地、invoke 超时、销毁都在
+// 那边，这里不再自己维护 requestId / waiters。缺桥时降级成失败而不是白屏——空面板
+// 比一句「桥未加载」难查得多。
 
-let invokeSeq = 0
-const waiters = new Map()
-
-window.addEventListener('message', (event) => {
-  const data = event.data
-  if (!data || typeof data !== 'object') return
-  if (data.type === 'plugin-theme') {
-    applyTheme(data.vars)
-    return
-  }
-  if (data.type === 'plugin-invoke-result') {
-    const waiter = waiters.get(data.requestId)
-    if (!waiter) return
-    waiters.delete(data.requestId)
-    if (data.ok) waiter.resolve(data.result)
-    else waiter.reject(new Error(data.error || 'invoke failed'))
-  }
-})
-
-/** 宿主主题 token（--pi-*）落到 documentElement，覆盖 style.css 的浅色兜底 */
-function applyTheme(vars) {
-  if (!vars || typeof vars !== 'object') return
-  const root = document.documentElement
-  for (const [name, value] of Object.entries(vars)) {
-    if (typeof value === 'string' && value) root.style.setProperty(name, value)
-  }
+const bridge = window.pi || {
+  invoke: () => Promise.reject(new Error('插件桥未加载，面板无法读取数据')),
+  forwardKey: () => {},
+  on: () => () => {},
+  settings: {},
+  context: {},
 }
 
-// 握手：主文档只有收到 hello 才回推 plugin-ready / plugin-theme / plugin-settings。
-// 少了这一步，界面会一直停在 style.css 的浅色兜底上（宿主换主题也不会有反应）。
-window.parent.postMessage({ type: 'plugin-hello', panelId: 'ask:main' }, '*')
-
-function api(method, params) {
-  const requestId = ++invokeSeq
-  window.parent.postMessage({ type: 'plugin-invoke', requestId, method, params }, '*')
-  return new Promise((resolve, reject) => waiters.set(requestId, { resolve, reject }))
-}
+/** 业务侧对桥的短名字：数据都从插件 main 侧的 methods 来 */
+const api = (method, params) => bridge.invoke(method, params)
 
 /** iframe 有焦点时宿主收不到键盘事件：Esc 上抛（回对话），Cmd/Ctrl+K 上抛（命令面板） */
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    window.parent.postMessage({ type: 'plugin-key', key: 'Escape' }, '*')
+    bridge.forwardKey('Escape')
     return
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault()
-    window.parent.postMessage({ type: 'plugin-key', key: 'k', mod: true }, '*')
+    bridge.forwardKey('k', { mod: true })
   }
 })
 

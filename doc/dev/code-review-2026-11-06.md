@@ -202,7 +202,7 @@ type ManifestRead = { dir: string; error?: string; errorKind?: 'manifest' | 'eng
 `normalizePluginComposerBar` 还做了兜底校验（认不出的 state 按 `active` 画）。
 `plugin_widget`、`plugin-data`、`plugin-open-session` 同理，都是机制不是业务。
 
-### 唯一实质性的耦合债：iframe invoke 桥被复制了三份，且已经分叉
+### ~~唯一实质性的耦合债~~：iframe invoke 桥被复制了三份，且已经分叉（**已修，见 §7**）
 
 | 插件 | 发 hello | invoke 超时 | 失败处理 |
 | --- | --- | --- | --- |
@@ -213,15 +213,11 @@ type ManifestRead = { dir: string; error?: string; errorKind?: 'manifest' | 'eng
 三份 `applyTheme()` / `api()` 逐字相似却各改各的。这类「胶水」不该由每个插件重写：
 它承载的是宿主协议，写错了（比如漏超时）不会有任何报错，只会表现为「按钮一直在转」。
 
-**建议的修法（本轮未做，理由见下）**：让宿主在 `pi-plugin://` 上占用一个保留
-hostname 提供桥脚本，例如 `pi-plugin://host/bridge.js`，插件 HTML 里一行
-`<script src="pi-plugin://host/bridge.js"></script>` 即可拿到
-`window.piBridge = { invoke(method, params), onEnvironment(cb) }`。可行性：协议
-的 CSP 已经是 `script-src pi-plugin:`（同 scheme 的脚本本来就允许），
-`protocol.ts` 只需在 handler 里对 `hostname === 'host'` 走另一条文件根。
-风险点是**打包期路径**：桥脚本要么进 extraResources，要么由 bundler 内联成字符串
-——这正是 `bundle-paths.ts` 那类坑的现场，需要单独一轮 + 打包后实测。
-另外 `discoverPlugins` 要跳过 `_` 开头的目录，否则设置页会多出一行「plugin.json not found」。
+**修法（§7 已实施）**：宿主在 `pi-plugin://` 上占用保留 hostname `__host` 下发
+`bridge.js`，插件 HTML 一行 `<script src="pi-plugin://__host/bridge.js"></script>`
+拿到 `window.pi`。协议 CSP 本来就是 `script-src pi-plugin:`，handler 只需在
+hostname 上分叉；桥脚本用 Vite 的 `?raw` **构建期内联成字符串**，绕开 extraResources
+与 asar 路径——`bundle-paths.ts` 那类坑一个都不用踩。
 
 ---
 
@@ -258,9 +254,11 @@ TERM 只会让忽略它的命令赖着不走，而 `waitForTerminal` 本来就�
 
 ## 6. 剩余风险
 
-1. **iframe 桥的分叉还在**（见 §4），最现实的影响是 ask 面板的 invoke 没有超时：
-   宿主侧正常路径都会回包，所以现在不发作；一旦 renderer 重载或 IPC 抛错，
-   那个按钮就永远转圈。
+1. **~~iframe 桥的分叉~~（§7 已修，待真机实测）**：三份客户端合一成宿主下发的
+   `window.pi`，统一 10s 超时，面板卸载时宿主发 `plugin-dispose` 把挂起的调用
+   reject 掉。**未验证的一点**：沙箱 iframe 从 `pi-plugin://__host/bridge.js` 取
+   子资源这一段，构建产物里已经内联好了，但没在真机上跑过——CSP `script-src pi-plugin:`
+   在语法上覆盖它，opaque origin 发起自定义协议的子资源请求也没有理论障碍，仍要实测确认。
 2. **POSIX 分支缺实证**：本机是 Windows，`detached: true` + `kill(-pid)` 的收整组
    只有单测里的 `if (process.platform !== 'win32')` 分支，从未真跑过。改动 POSIX
    停止链路前必须先能在 Linux/macOS 上跑一遍
@@ -269,3 +267,97 @@ TERM 只会让忽略它的命令赖着不走，而 `waitForTerminal` 本来就�
    换到正常 Windows 会话或 CI 上验证一次即可。
 4. **热重载的已知边界**（文档已记）：直接改插件目录内的 `plugin.json` 不会改根目录
    mtime，`discoverPlugins` 缓存不失效 → 改 manifest 要重启应用。
+
+---
+
+## 7. 桥归宿主：调研与实施
+
+### 7.1 业界怎么做（同构案例）
+
+| | 沙箱 | 宿主给的能力 | 请求/响应 |
+|---|---|---|---|
+| VS Code webview | iframe + 严格 CSP + `localResourceRoots` | 注入全局 `acquireVsCodeApi()` | 官方只给 `postMessage`，Promise 化留给社区 |
+| Figma plugin | UI 是 iframe（null origin），主侧是独立 JS 沙箱 | 沙箱里注入 `figma` 对象 | `parent.postMessage({ pluginMessage })` |
+| 阿里云千问内嵌应用 | WebView / iframe 两种 | WebView 注入 `window.qwBridge`；**iframe 明确「宿主不注入脚本，页面自己封」** | `bridge-request` / `bridge-response` + `id` |
+| inSCADA 自定义 HTML | `sandbox="allow-scripts allow-forms"` | 注入 `InscadaApi` 代理 | `INSCADA_API_CALL` / `_RESPONSE` + `requestId` |
+
+四个里三个把桥放在宿主侧，插件只写业务。唯一让页面自己封的是阿里云的 iframe 分支，
+但那是**第三方页面**（宿主无权往别人站里注脚本）。我们的插件 UI 是宿主自己仓库里的代码，
+性质更接近 VS Code / Figma，所以「每个插件各写一份客户端」在这个形态里是少数派。
+
+VS Code 还有一句值得照抄的约束：`acquireVsCodeApi()` 的返回值必须保持私有，
+不能泄漏到全局作用域。
+
+### 7.2 一个躲不开的约束
+
+`sandbox="allow-scripts"` 不带 `allow-same-origin`，iframe 就是 opaque origin：
+
+- `event.origin` 恒为字符串 `"null"`，**没有鉴权价值**（所有沙箱 iframe 长得一样）；
+  唯一可靠判据是 `event.source === frame.contentWindow`。
+- 父 → 子 `postMessage` 的 `targetOrigin` **只能传 `'*'`**：`"null"` 不是合法 URL，
+  会抛 `SyntaxError: Invalid target origin`。所以现有代码里的 `'*'` 不是偷懒，是被逼的。
+- `'*'` 的真实风险（penpal 文档专门警告过）：iframe 若被导航到第三方页面，那个页面会
+  收到本该发给插件的消息。当前没有缓解手段，属于已知风险——插件 HTML 只加载
+  `pi-plugin://` 资源，导航到外站的路径本身也不存在。
+
+### 7.3 抄进来的四条
+
+1. **每个往返必须有超时**。penpal 官方把「默认不超时」写成坑；`@xoxo-labs/figma-kit`
+   给 `figmaAPI.run` 定 15s，理由和我们的情况一字不差：卡死的沙箱应该表现为
+   rejected promise，而不是永远转圈的 spinner。
+2. **通道要有销毁语义**。penpal 的 `connection.destroy` 会把挂起的调用 reject 掉
+   （`ERR_CONNECTION_DESTROYED`）。对应到我们：面板卸载 / 插件停用时 reject 所有
+   pending，否则那些 `invoke` 只能等各自的超时，没有超时的就永远挂着。
+3. **握手带版本号**。penpal 的 `connection.promise` 要等双方交换完方法表才 resolve。
+   我们只有 hello/ready 不带版本，宿主改协议时旧插件 UI 会静默错位。
+4. **错误用码**。penpal 有 `ERR_CONNECTION_TIMEOUT` 这类可编程码，插件侧才能区分
+   「超时可重试」和「方法不存在，重试没用」。
+
+**没抄的两条**：消息形状白名单（`event.data` 来自不可信一侧，`method` 会直接透到
+`methods[name]`——目前靠 main 侧 methods 表兜底，够用）；MessageChannel 私有端口
+（比广播更干净，但要改握手的时序，等有第二个消费者再说）。
+
+### 7.4 为什么没引 penpal
+
+- **origin 模型对我们的情况失效**：`WindowMessenger` 默认用当前 origin 做
+  `allowedOrigins`，我们要用就得设 `childOrigin: '*'`，而它的文档明确写着
+  `*` is discouraged。引个库还要绕开它最主要的安全设计。
+- **它是「双方预先声明方法表」的代理模型**：`connectToChild({ methods })` 要求宿主
+  先知道对方有什么方法。我们的 `methods` 是插件运行时动态提供的、宿主不认识方法名，
+  它最值钱的那层 typed proxy 用不上，只剩 message 封装——那部分自己写 60 行更可控。
+
+顺带确认：Electron 官方至今不建议用 `<webview>` 标签，推荐 iframe 一类方案，
+我们走 iframe 是符合建议的。
+
+### 7.5 实施内容
+
+- 新增 `packages/shared/plugin-bridge.ts`：`PLUGIN_BRIDGE_PROTOCOL`（=1）、
+  保留 hostname `__host`（`PLUGIN_ID_PATTERN` 要求字母开头，插件 id 永远撞不上）、
+  `pluginBridgeUrl()`、`isPluginBridgeRequest()`。
+- 新增 `src/main/plugins/bridge/bridge.js`：IIFE，ES2017 以内，不 import 任何东西。
+  对外 `window.pi = { invoke, on, off, openPanel, setContentHeight, forwardKey, dispose,
+  protocol, panelId, settings, context, theme, disposed }`；`window.pi` 用
+  `writable:false, configurable:false` 定义，后来的脚本改不掉它。
+- `protocol.ts`：hostname 命中 `__host` 时直接返回桥源码（`Content-Type: text/javascript`）。
+  源码用 Vite 的 `?raw` **构建期内联**（产物里能看到 `#region src/main/plugins/bridge/bridge.js?raw`），
+  运行时不读磁盘——extraResources / asar / chunk 化三种路径坑一次踩完。
+- `plugin-panel-frame.tsx`：`plugin-ready` 带 `protocol`；`plugin-hello` 走统一入口；
+  卸载时向 iframe 发 `plugin-dispose`（用单独记的 `frameWindowRef`，因为 `useEffect`
+  cleanup 时 DOM ref 已经置空）；换面板时重置 `readySentRef`，新文档要重新握手。
+- 三个插件：HTML 加一行 script，`app.js` 删掉自写的 `waiters` / `invokeSeq` /
+  `applyTheme` / hello / 超时定时器（合计约 120 行），改成一个降级对象 + `api()` 别名。
+- 新测试：`src/main/plugins/__tests__/plugin-bridge.test.ts` 15 条（用 `node:vm` 造
+  干净 realm 真跑源码：握手、配对、超时、迟到回包、dispose、跨 frame 消息、重复加载、
+  协议版本一致）；`packages/shared/plugin-bridge.test.ts` 4 条；
+  `scripts/test-utils/fake-bridge.mjs` 给两个 UI 测试共用。
+
+### 7.6 效果
+
+| 插件 | 之前 | 现在 |
+|---|---|---|
+| ask | 无超时 | 10s + dispose |
+| background-tasks | 无 hello、无超时 | 桥自动握手 + 10s + dispose + context 事件 |
+| scheduler | 10s 超时 | 同左，代码少 40 行 |
+
+插件侧现在只剩业务逻辑；协议改动只动两处（`bridge.js` 与 `plugin-panel-frame.tsx`），
+且版本号不一致时桥会 warn。
