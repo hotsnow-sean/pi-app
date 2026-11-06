@@ -956,3 +956,38 @@ if (signature !== lastSignature) { lastSignature = signature; rebuild() } else u
 `plugin-message-note.test.tsx` 6 条：围栏切块（含未闭合围栏不吞内容）、短回报不折叠、
 长回报默认折叠且徽标/id 常驻、点击展开后围栏变代码块、再点收回。
 代码块高亮是异步的会替换节点，断言用 `waitFor + textContent` 而不是抓节点。
+
+## 22. 重启后回报从对话流里消失（v7 报告 §三.2）
+
+### 22.1 现象
+
+回报当场看得见，重开软件后那条转述行整个没了（插件面板里的记录还在）。
+
+### 22.2 根因：落盘形态与实时形态不是一种 entry
+
+| 链路 | 消息形态 |
+|---|---|
+| 实时（app event + worker） | `{ type: message, message: { role: custom, customType, details } }` |
+| 磁盘（SessionManager.getBranch） | `{ type: custom_message, customType, content, display, details }`，**没有 message 字段** |
+
+`timelineItemsFromBranchPath()` 里写的是 `if (e.type !== message || !e.message) continue`——
+重启回放时 custom_message entry 不匹配，被整条跳过，于是回报在历史里凭空消失。
+实时链路不走这个转换器，所以当场一切正常，只有重开才暴露。
+
+现有测试（`worker-timeline-plugin-message.test.ts`）当时按 `{type:message, message: customMessage()}` 写的，
+测的是实时形态，恰好把这个缺口漏掉了——**测试用的形状要和磁盘上的真实形状对齐**。
+
+### 22.3 修法
+
+`timelineItemsFromBranchPath()` 认 `custom_message` entry，还原成 `role:custom` 的伪消息，
+走同一条加工路径（`pluginMessageText` 仍负责挡掉 `display:false` 的隐藏上下文）。
+主进程（读盘）与 worker（loadSession）两条历史路径共用这个函数，改一处两边都生效。
+
+顺手补了两条用例：磁盘形态的 custom_message 能出转述行（带 origin 与 sessionEntryId），
+`display:false` 的隐藏上下文照样不进时间线。
+
+### 22.4 v7 报告另一条可选优化
+
+`bg_output` 的 offset 已经到日志末尾时原本说「没有输出。」——读起来像「这个任务根本没输出」。
+现在按 `nextOffset >= totalBytes` 判定为「已读到末尾（没有新内容）。」（运行中则说
+「已读到末尾，暂时没有新输出。」）。插件版本 v0.6.3。

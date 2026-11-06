@@ -193,6 +193,27 @@ describe('stdout/stderr split', () => {
     expect(fs.readFileSync(row.logPath, 'utf8')).toContain('out-line')
     expect(fs.readFileSync(row.errPath, 'utf8')).toContain('err-line')
   }, 60_000)
+
+  it('says it reached the end instead of claiming there is no output', async () => {
+    const res = await start({ command: 'echo only-line', label: '读到末尾' })
+    const task = await waitDone(res.details.id)
+    const first = await handle.invoke('tool.execute', {
+      name: 'bg_output',
+      args: { id: task.id },
+      sessionFile: 's1.jsonl',
+    })
+    expect(first.text).toContain('only-line')
+
+    const again = await handle.invoke('tool.execute', {
+      name: 'bg_output',
+      args: { id: task.id, offset: first.details.nextOffset },
+      sessionFile: 's1.jsonl',
+    })
+    expect(again.details.chunk).toBe('')
+    // offset 已在末尾：说「没有输出」会被读成「这个任务根本没输出」
+    expect(again.text).toContain('已读到末尾')
+    expect(again.text).not.toContain('没有输出。')
+  }, 60_000)
 })
 
 describe('timeout guard', () => {
