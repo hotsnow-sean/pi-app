@@ -354,6 +354,7 @@ type BgTask = {
 - **做法**：`shell?: 'auto' | 'bash' | 'cmd' | 'powershell'`，默认 `auto` = 探测 Git Bash（常见安装路径 + `where bash`），找到就用；找不到才回落 cmd。`cmd` / `powershell` 只能显式指定。
 - **兜底**：最终落到 cmd 时，命令里出现 `$(`、`${`、`for … in`、`export x=`、`[[` 一律**直接报错**并提示传 `shell:'bash'`，不再静默变形。
 - 另一种 shell 走临时 `.ps1`（脚本文件 + cmd 重定向，避开它自己 `*>` 写 UTF-16 的乱码问题）。
+- **补（2026-11-06 审查）**：`cmd` / `powershell` 是 Windows 专属，POSIX 上收到它们**直接报错**，不再静默跑 `/bin/sh`（「指定了 shell」这件事不能是假的）。同时把入参白名单收进 `shell.mjs` 的 `SHELLS`：schema 只是建议，模型传个 `pwsh`/`zsh` 进来过去会落到平台默认 shell，现在一样报错并列出可选值。
 
 ### 11.2 返回值：可读文本 + details（P0 的一半）
 
@@ -371,6 +372,7 @@ type BgTask = {
 
 - `bg_stop({ waitMs })`：等进程真退出再返回（上限 10s），省掉「再查一次」。
 - 被杀的进程会带无意义退出码（taskkill 通常是 1），原先直接写进 `exitCode`，与真实失败撞车。现在 stopped 的 `exitCode` 一律 `null`，原始码留 `rawExitCode`，原因记 `stopReason: user | log-limit`。
+- **补（2026-11-06 审查）**：`force` 只在 POSIX 上有意义（`SIGKILL` vs `SIGTERM`）。Windows 侧一律组杀 + `taskkill /T /F`——那里没有「先礼后兵」这条路，TERM 会拖住忽略它的进程。schema 之前写的是「Kill immediately instead of asking the process to exit first」，在 Windows 上等于承诺了做不到的事，已改为如实说明；`waitMs` 的隐式默认值（1000ms）也一并写进描述。
 
 ### 11.5 bg_output 长轮询，不做 bg_wait（P1，改了方案）
 
