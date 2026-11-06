@@ -42,8 +42,11 @@ class IpcClientImpl {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async invoke<M extends string>(method: M, request?: any): Promise<any> {
     if (!window.piDesktop) {
-      console.warn(`[IPC] piDesktop not available, stubbing ${method}`)
-      return {}
+      // 不要返回 {}：调用方会把「桥没了」当成「空数据」（res.items === undefined），
+      // 再往 state 里一塞，下一次渲染就在 .filter/.map 上把整个外壳炸掉。
+      // 失败就是失败——每个调用点都有 catch，会显示可重试的错误态。
+      console.error(`[IPC] piDesktop bridge missing, cannot invoke ${method}`)
+      throw new Error(`IPC bridge unavailable: ${method}`)
     }
     return window.piDesktop.invoke(`ipc:${method}`, request)
   }
