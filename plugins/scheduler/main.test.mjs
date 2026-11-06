@@ -583,6 +583,8 @@ describe('条件通知', () => {
     reply = async () => ({ ok: true, text: '构建失败：3 个测试挂了\nSCHED:failed: 3 个测试未通过' })
     const created = await createTask({ notifyPolicy: 'failures' })
     await invoke('runNow', { id: created.details.id })
+    // 约定里必须写清「辅助命令非 0 不算失败」，否则 agent 会把 grep 没匹配判成失败
+    expect(promptCalls[0].prompt).toContain('辅助命令')
     const [run] = await waitRuns(created.details.id)
     expect(run.status).toBe('failed')
     expect(run.error).toBe('3 个测试未通过')
