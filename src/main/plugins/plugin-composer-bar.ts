@@ -14,6 +14,16 @@ import type { AppEvent } from '@shared/app-events'
  */
 let seq = 0
 
+/**
+ * 当前所有托盘状态：pluginId → sessionFile → bar。
+ *
+ * 为什么 main 要留一份：插件激活可能早于 renderer 窗口挂上事件监听（启动时
+ * activateEnabledPlugins 与 createWindow 并行），彼时的推送 `webContents.send`
+ * 直接石沉大海——托盘是纯推送面，丢了就再没有自然恢复的机会（右栏面板是拉取式，
+ * 所以表现为「面板正常、托盘消失」）。留这份状态表，renderer 启动时拉一次补齐。
+ */
+const currentBars = new Map<string, Map<string, PluginComposerBarState>>()
+
 export function publishPluginComposerBar(
   pluginId: string,
   sessionFile: string,
@@ -21,6 +31,18 @@ export function publishPluginComposerBar(
 ): void {
   const file = String(sessionFile || '').trim()
   if (!file) return
+  const normalized = bar ? normalizePluginComposerBar(bar) : null
+  let perPlugin = currentBars.get(pluginId)
+  if (normalized) {
+    if (!perPlugin) {
+      perPlugin = new Map()
+      currentBars.set(pluginId, perPlugin)
+    }
+    perPlugin.set(file, normalized)
+  } else if (perPlugin) {
+    perPlugin.delete(file)
+    if (perPlugin.size === 0) currentBars.delete(pluginId)
+  }
   seq += 1
   const event: AppEvent = {
     type: 'plugin_widget',
@@ -31,7 +53,28 @@ export function publishPluginComposerBar(
     sessionFile: file,
     timestamp: Date.now(),
     pluginId,
-    bar: bar ? normalizePluginComposerBar(bar) : null,
+    bar: normalized,
   }
   for (const win of BrowserWindow.getAllWindows()) sendEvent(win, event)
+}
+
+/** renderer 启动拉取：所有插件当前推着的托盘（含会话归属），一次拿全 */
+export function listPluginComposerBars(): Array<{
+  pluginId: string
+  sessionFile: string
+  bar: PluginComposerBarState
+}> {
+  const out: Array<{ pluginId: string; sessionFile: string; bar: PluginComposerBarState }> = []
+  for (const [pluginId, perPlugin] of currentBars) {
+    for (const [sessionFile, bar] of perPlugin) out.push({ pluginId, sessionFile, bar })
+  }
+  return out
+}
+
+/** 插件停用/卸载：收回它推的所有托盘（按会话广播 null，renderer 与状态表同步清掉） */
+export function clearPluginComposerBars(pluginId: string): void {
+  const perPlugin = currentBars.get(pluginId)
+  if (!perPlugin) return
+  currentBars.delete(pluginId)
+  for (const sessionFile of perPlugin.keys()) publishPluginComposerBar(pluginId, sessionFile, null)
 }
