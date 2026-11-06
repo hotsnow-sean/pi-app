@@ -1,7 +1,7 @@
 import { BrowserWindow, shell } from 'electron'
-import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { resolveAppIcon } from './app-icon'
+import { resolvePreloadFile, resolveRendererHtml } from './bundle-paths'
 
 const isMac = process.platform === 'darwin'
 const isLinux = process.platform === 'linux'
@@ -91,7 +91,8 @@ export function createWindow(closeToTray = false): BrowserWindow {
     title: 'pi Desktop',
     icon: resolveAppIcon(),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.cjs'),
+      // 不能用 __dirname：本模块可能被打进 out/main/chunks（见 bundle-paths 注释）
+      preload: resolvePreloadFile('index.cjs'),
       additionalArguments: [customThemeRendererArgument(), ...(isE2eTestMode() ? ['--pi-e2e'] : [])],
       sandbox: readRendererSandboxEnabled(),
       contextIsolation: true,
@@ -149,7 +150,7 @@ export function createWindow(closeToTray = false): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(resolveRendererHtml())
   }
 
   return mainWindow

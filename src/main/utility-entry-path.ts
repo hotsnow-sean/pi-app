@@ -1,12 +1,9 @@
-import { app } from 'electron'
-import { basename, dirname, join } from 'node:path'
+import { join } from 'node:path'
+import { resolveMainOutDir } from './bundle-paths'
 
 export function resolveUtilityEntry(
   entryName: 'worker.mjs' | 'preview.mjs' | 'preview-wsl.mjs',
-  appPath = app.getAppPath(),
+  appPath?: string,
 ): string {
-  const mainDir = basename(appPath) === 'main' && basename(dirname(appPath)) === 'out'
-    ? appPath
-    : join(appPath, 'out', 'main')
-  return join(mainDir, entryName)
+  return join(resolveMainOutDir(appPath), entryName)
 }

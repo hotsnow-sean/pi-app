@@ -1,6 +1,6 @@
 import { BrowserWindow, Notification, ipcMain, screen } from 'electron'
-import { join } from 'path'
 import { resolveAppIcon } from './app-icon'
+import { resolvePreloadFile } from './bundle-paths'
 import { getMainWindow } from './window'
 import { readSessionMetaFromFile } from './session-file-meta'
 import { setCompletionDndUntil } from './completion-notification-settings'
@@ -153,7 +153,7 @@ async function createHost(): Promise<boolean> {
   ensureListeners()
   try {
     host = new BrowserWindow(
-      completionNotificationWindowOptions(join(__dirname, '../preload/notification.cjs')),
+      completionNotificationWindowOptions(resolvePreloadFile('notification.cjs')),
     )
     host.setMenu(null)
     host.on('closed', () => {
