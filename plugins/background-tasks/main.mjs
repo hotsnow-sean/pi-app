@@ -313,7 +313,14 @@ async function readLog(task, { offset, maxBytes, tailLines, stream }) {
     const want = Number(tailLines)
     if (fromEnd && want > 0) {
       const lines = out.chunk.split('\n')
-      out.chunk = lines.slice(Math.max(0, lines.length - Math.min(want, 500))).join('\n')
+      // 日志每行都以 \n 结尾，split 后末尾多一个空串——不摘掉它，
+      // tailLines 就永远少一行（传 1 直接拿到空串 =「没有输出」）
+      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+      const kept = lines.slice(Math.max(0, lines.length - Math.min(want, 500)))
+      out.chunk = kept.join('\n')
+      // tail 截取后 chunk 不再是整段切片：chunkBytes 必须跟着实际返回的字节数走，
+      // 否则按它做进度/校验的程序会拿到整个日志的大小
+      out.chunkBytes = Buffer.byteLength(out.chunk, 'utf8')
       out.truncated = true
     }
   } catch {
@@ -1087,13 +1094,18 @@ const tools = {
     // ids 维度就是只在一份里生效才暴露的）。这里只负责把结果格式化成给模型看的文案。
     const res = await methods.clearTasks(args)
     const wanted = Array.isArray(args.status) ? args.status.map(String) : args.status ? [String(args.status)] : []
+    // 「没有 running 任务」与事实不符是排障陷阱：明明在跑却说没有，
+    // 实情是 keepRunning=true 把它们跳过了。文案必须说实话。
+    const runningSkipped = res.skippedRunning || 0
     if (!res.cleared) {
       return {
         text: res.missing?.length
           ? `没有匹配的任务可清理（id 不存在：${res.missing.join(', ')}）。`
-          : wanted.length
-            ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
-            : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
+          : runningSkipped > 0 && wanted.includes('running')
+            ? `${runningSkipped} 个运行中任务已跳过（keepRunning 默认 true，清理只动已结束的记录）。要连任务一起停止并删除请传 keepRunning:false。`
+            : wanted.length
+              ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
+              : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
         details: res,
       }
     }
@@ -1101,7 +1113,9 @@ const tools = {
     return {
       text: `已清理 ${res.cleared} 条任务记录（${res.ids.join(', ')}）。${
         res.missing?.length ? `id 不存在已跳过：${res.missing.join(', ')}。` : ''
-      }${remaining ? `仍有 ${remaining} 个任务在运行。` : ''}`,
+      }${runningSkipped > 0 ? `${runningSkipped} 个运行中任务已跳过（keepRunning=true），要一并停止请传 keepRunning:false。` : ''}${
+        remaining ? `仍有 ${remaining} 个任务在运行。` : ''
+      }`,
       details: res,
     }
   },
@@ -1335,13 +1349,19 @@ const methods = {
     const keep = keepRunning !== false
     const wanted = Array.isArray(status) ? status.map(String) : status ? [String(status)] : []
     const wantedIds = Array.isArray(ids) ? ids.map(String) : ids ? [String(ids)] : []
+    let skippedRunning = 0
     const victims = state.tasks.filter((t) => {
+      // keepRunning 也约束 ids 路径：点名清理不是强杀通行证，
+      // 默认跳过运行中的（误传一个 id 不该静默终止长任务），keepRunning:false 才停+删
+      if (keep && t.status === 'running') {
+        if (wantedIds.length > 0 ? wantedIds.includes(t.id) : wanted.includes('running')) skippedRunning++
+        return false
+      }
       if (wantedIds.length > 0) return wantedIds.includes(t.id)
-      if (keep && t.status === 'running') return false
       return wanted.length === 0 || wanted.includes(t.status)
     })
     // 按 id 清理时静默跳过不存在的 id 而不是整体报错：脚本场景常是「尽力清」
-    if (wantedIds.length > 0 && victims.length === 0) {
+    if (wantedIds.length > 0 && victims.length === 0 && skippedRunning === 0) {
       return {
         ok: true,
         cleared: 0,
@@ -1373,6 +1393,7 @@ const methods = {
       cleared: clearedIds.length,
       ids: clearedIds,
       running: remaining,
+      ...(skippedRunning > 0 ? { skippedRunning } : {}),
       ...(missing.length ? { missing } : {}),
     }
   },
