@@ -20,7 +20,7 @@ import { join as joinPath } from 'node:path'
 // jsdom 测试环境会给 URL 构造器打补丁，相对解析会落到 document.baseURI 上
 const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : ''
 const imp = (name) => import(pathToFileURL(joinPath(import.meta.dirname, `${name}.mjs`)).href + Q)
-const { rt, PLUGIN_ID, SETTING_DEFAULTS } = await imp('runtime')
+const { rt, pluginId, SETTING_DEFAULTS } = await imp('runtime')
 const { fmtDuration, fmtBytes, normSession, statusText } = await imp('format')
 const { tailOf, countLines } = await imp('log-io')
 const { save } = await imp('store')
@@ -213,7 +213,7 @@ export async function deliver(sessionFile, items, skipped) {
       // 模型有空看一眼的位置；会话空闲时宿主照旧立即开新轮，两条路都覆盖。
       deliverAs: 'steer',
       origin: {
-        pluginId: PLUGIN_ID,
+        pluginId: pluginId(),
         label: '后台任务',
         kind: 'report',
         // kind 的界面文案由插件自带：宿主不认识 'report'，也不该为它维护一张映射表

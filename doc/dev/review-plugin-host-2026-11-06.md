@@ -330,6 +330,7 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 | 2 | 2.2 ① 托盘词表通用化、② kind 文案外移、③ 注释与重复类型 | ✅ 插件 v0.7.0 |
 | 3 | 2.3 `PluginContext` 类型化 + 插件侧 SDK 入口 | ✅ `49a3197` |
 | 4 | 3.1 插件 main 拆模块 + 宿主目录级 cache bust | ✅ 本轮 |
+| 5 | P2-7 engines 校验、P2-8 目录缓存、P3 小项收尾 | ✅ 本轮 |
 
 批次 1 与批次 2 都补了测试，且都用「回滚到旧代码」验证过测试确实会失败。
 
@@ -363,6 +364,6 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 | 项 | 说明 |
 |---|---|
 | ~~3.1 插件 main 拆模块~~ | ✅ 已拆（薄入口 + 10 个 lib，见 background-tasks-design.md §26） |
-| P2-7 `engines` 校验 | 声明了却不生效的契约比没有更糟 |
-| P2-8 `discoverPlugins` 目录缓存 | 同步 FS 在对话主链路上；顺带缓存 `pluginToolDescriptors()` |
-| P3-3~P3-10 | 都是顺手可修的小项：`PLUGIN_ID` 改用 `ctx.pluginId`、`normSession` 两处合一、`clearTasks` 批量推托盘、启动时不重复推托盘、`plugin-tools` 格式与重复 `asDetails`、多窗口广播收敛、`plugin-content-height` 的 400px 上限写进契约 |
+| ~~P2-7 `engines` 校验~~ | ✅ 批次 5（`packages/shared/semver-range.ts` 精简 range 匹配 + readManifest 校验，不满足 = 不可激活并进设置页诊断） |
+| ~~P2-8 `discoverPlugins` 目录缓存~~ | ✅ 批次 5（缓存键 = 各根目录 mtime，enabled 现算、启停抬代数；`pluginToolDescriptors()` 挂发现代数上缓存） |
+| ~~P3 小项~~ | ✅ 批次 5：P3-1/2/6/8 已随批次 1/2/4 顺手修掉；本轮修 P3-3（`ctx.pluginId` 为准，硬编码只做测试兜底）、P3-4（两份实现物理上合不了——iframe 没 node 模块——改为导出 + ui/main 等价性守门测试）、P3-5（clearTasks 按会话聚合推送）、P3-7（格式）、P3-9（broadcastEvent 收敛到 ipc/registry）、P3-10（400px 上限提成 MAX_CONTENT_HEIGHT 并写进 plugin-host-api.md） |

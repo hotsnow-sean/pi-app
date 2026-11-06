@@ -14,6 +14,11 @@ plugins/<id>/
   ui/session-bar.html （可选）对话区顶部的会话条
 ```
 
+manifest 的 `engines['pi-desktop']`（可选，semver range，如 `">=1.4.0"`、`"^1.2"`、`"1.x || >=2.0.0"`）
+**是会被校验的**：宿主版本不满足时插件不可激活，设置页的诊断信息里写明原因。
+支持比较符 / `^` / `~` / `x` 通配 / 空格 AND / `||` OR（实现见 `packages/shared/semver-range.ts`，
+语法不合法时放行——它是作者的自我声明，不是安全边界）。
+
 `main.mjs` 是被 `import()` 进 **Electron main 进程**的普通 ESM 模块——`node:fs`、`node:child_process`
 都能用。也正因为如此：抛出去的异常会直接砸在主进程里，所有异步入口必须自己 try/catch。
 
@@ -162,6 +167,8 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
   - `plugin-key`（把 Esc / Cmd-K 转给宿主，否则 iframe 有焦点时快捷键失效）
   - `plugin-content-height`（**仅 sessionBars**）：上报自身高度，`0` = 收起。
     宿主按这个值撑容器；报 0 时 iframe 不卸载，随时能再撑开。
+    **上限 400px**（`plugin-panel-frame.tsx` 的 `MAX_CONTENT_HEIGHT`）：会话条是
+    对话流的租客，超过这个高度的内容应该做进右栏面板，宿主会截断而不是把对话流顶开。
   - `plugin-open-panel`：`{ panelId, requestId }` 请求宿主切到某个右栏面板并展开。
     宿主只在面板真实存在于目录时动手，回 `plugin-open-panel-result { ok }`。
 - 同一份 HTML 可以在中央视图与右栏两处渲染，按自身宽度自适应（用 `@media (max-width:460px)` 之类做窄栏分支）。

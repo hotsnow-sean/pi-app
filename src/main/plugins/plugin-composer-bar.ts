@@ -1,5 +1,4 @@
-import { BrowserWindow } from 'electron'
-import { sendEvent } from '../ipc/registry'
+import { broadcastEvent } from '../ipc/registry'
 import { normalizePluginComposerBar, type PluginComposerBarState } from '@shared/plugin-composer-bar'
 import type { AppEvent } from '@shared/app-events'
 
@@ -55,7 +54,7 @@ export function publishPluginComposerBar(
     pluginId,
     bar: normalized,
   }
-  for (const win of BrowserWindow.getAllWindows()) sendEvent(win, event)
+  broadcastEvent(event)
 }
 
 /** renderer 启动拉取：所有插件当前推着的托盘（含会话归属），一次拿全 */

@@ -171,6 +171,13 @@ function sameSession(a, b) {
   return x.split('/').pop() === y.split('/').pop()
 }
 
+// 暴露给测试：P3-4——normSession/sameSession 在 main 侧（lib/format.mjs）与这里各有一份
+// （iframe 里没有 node 模块，物理上合不了），两份实现的等价性由 ui/app.test.mjs 守着。
+// 改这里或改那边，测试都会红。
+if (typeof window !== 'undefined') {
+  window.__sessionMatch = { normSession, sameSession }
+}
+
 /** 面板只看当前会话 */
 function visibleTasks() {
   return state.tasks.filter((t) => sameSession(t.sessionFile, state.sessionFile))
