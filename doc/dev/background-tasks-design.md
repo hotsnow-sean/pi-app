@@ -920,3 +920,39 @@ if (signature !== lastSignature) { lastSignature = signature; rebuild() } else u
 用例里关掉了 1.5s 轮询（`setInterval` 换成空实现）：要证明的就是「动作之后
 立刻刷」，靠轮询兜住的刷新正是要杜绝的现象。回滚到旧代码验证过：第 1、3 条
 用例超时失败，第 2 条（清空后还剩运行中任务）通过——与现象完全一致。
+
+## 21. 回报转述行的折叠（宿主渲染层）
+
+### 21.1 为什么要折
+
+`buildReport()` 一次最多带 3 个任务，每个任务 20 行 tail（含 ``` 围栏）+ stderr 块
++ 完整日志行，再加一段处理指令——最坏约 70~80 行，一条回报能把对话流占掉大半屏。
+折叠只能做在渲染层：`ctx.sessions.send` 的 content 是模型与界面共用的同一份文本，
+插件侧压缩等于让模型也少看输出。
+
+### 21.2 形状
+
+`PluginMessageNote`（`features/timeline/plugin-message-note.tsx`）承接原来的内联 JSX：
+
+- **头部常驻**：来源徽标 + kind + `origin.detail`（回报里就是 `bg-3, bg-5`）+ 折叠提示；
+  整行是一个 button，chevron 用 `.chevron-expand[data-open]` 旋转。
+- **折叠判定**：正文 > 6 行或 > 400 字才折；短回报直接铺开，不为两行字加一次点击。
+  折叠态渲染**正文第一句**（回报的首行天然是 `【后台任务回报】bg-3「…」已完成，耗时 3.2s。`），
+  单行截断。
+- **展开态**：`max-h-16rem` + `data-independent-scroll`（与 thinking 正文同一约定，
+  滚轮不会带动整条时间线）。状态是本地 `useState`：回报一次性阅读，不值得进 session store。
+- **围栏切块**：`splitMessageBlocks()` 按 ``` 把正文切成散文 / 代码两类块，代码走
+  `CodeBlockView`。此前纯文本渲染会把三行反引号原样露出来，展开也看不出输出边界；
+  代码块内不再二次折叠（`previewLines` = 实际行数），点开就是要看全。
+
+### 21.3 顺手修的 i18n
+
+转述行的 kind 文案原本写的是 `t(pluginMessage.kindReport)`，但 `defaultNS` 是
+`common`、该键在 `timeline` 命名空间里——实际渲染出来是裸键名
+`pluginMessage.kindReport`。改成 `t(timeline:pluginMessage.kindReport)`。
+
+### 21.4 测试
+
+`plugin-message-note.test.tsx` 6 条：围栏切块（含未闭合围栏不吞内容）、短回报不折叠、
+长回报默认折叠且徽标/id 常驻、点击展开后围栏变代码块、再点收回。
+代码块高亮是异步的会替换节点，断言用 `waitFor + textContent` 而不是抓节点。

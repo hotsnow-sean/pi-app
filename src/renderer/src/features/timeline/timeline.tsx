@@ -12,6 +12,7 @@ import { ipcClient } from '@renderer/lib/ipc-client'
 import { StreamingCaret } from './tool-card-primitives'
 import { SessionOpenLoadingView } from './session-open-loading'
 import { ThinkingChainBlock } from './thinking-chain-block'
+import { PluginMessageNote, type PluginMessageOrigin } from './plugin-message-note'
 import { ReplyPlaceholder } from './reply-placeholder'
 import { ToolCallRow } from './tool-call-row'
 import { ToolGroupSummary } from './tool-group-summary'
@@ -90,26 +91,14 @@ const TimelineItemBase = memo(function TimelineItem({
     const segments: Segment[] = (item.segments as Segment[] | undefined)?.length
       ? (item.segments as Segment[])
       : [{ type: 'text', text: String(item.text || '') }]
-    // 插件投递的回报（sessions.send）：渲染成左对齐「转述行」——来源徽标 + 浅底正文，
+    // 插件投递的回报（sessions.send）：渲染成左对齐「转述行」——来源徽标 + 可折叠正文，
     // 不带回溯/分叉（它不是用户输入，rewind 到它没有意义），与右侧用户气泡区分。
-    const origin = item.pluginOrigin as
-      | { pluginId: string; label: string; kind?: string; detail?: string }
-      | undefined
+    const origin = item.pluginOrigin as PluginMessageOrigin | undefined
     if (origin) {
-      const kindText = origin.kind === 'report' ? t('pluginMessage.kindReport') : origin.kind
+      const text = segments.map((s: Segment) => (s.type === 'text' ? s.text : '')).join('')
       return (
         <div className="timeline-message-row timeline-plugin-row">
-          <div className="timeline-plugin-note">
-            <div className="timeline-plugin-badge">
-              <span className="timeline-plugin-badge-label">{origin.label}</span>
-              {kindText ? <span className="timeline-plugin-badge-kind">{kindText}</span> : null}
-            </div>
-            <div className="timeline-plugin-text">
-              {segments.map((s: Segment, i: number) =>
-                s.type === 'text' ? <span key={i}>{enrichPlainTextWithPaths(s.text)}</span> : null,
-              )}
-            </div>
-          </div>
+          <PluginMessageNote origin={origin} text={text} />
         </div>
       )
     }
