@@ -190,8 +190,11 @@ export const tools = {
       text: `已清理 ${res.cleared} 条任务记录（${res.ids.join(', ')}）。${
         res.missing?.length ? `id 不存在已跳过：${res.missing.join(', ')}。` : ''
       }${runningSkipped > 0 ? `${runningSkipped} 个运行中任务已跳过（keepRunning=true），要一并停止请传 keepRunning:false。` : ''}${
-        remaining ? `仍有 ${remaining} 个任务在运行。` : ''
-      }`,
+        // 记录清了不等于磁盘清了：句柄还占着的时候如实说，别让人以为已经干净
+        res.stuckFiles
+          ? `其中 ${res.stuckFiles} 个日志文件仍被进程占用，已安排自动重试，稍后会收走（不用再清一次）。`
+          : ''
+      }${remaining ? `仍有 ${remaining} 个任务在运行。` : ''}`,
       details: res,
     }
   },
@@ -265,11 +268,14 @@ export const tools = {
     const task = taskById(String(args.id || ''))
     if (!task) throw new Error(`unknown task: ${args.id}`)
     const stopped = stopTask(task, args.force === true)
+    // 不传 waitMs 也给 1s：停止是短操作，回执顺手带上终态，省一次 bg_list 往返。
+    // 显式传 0 表示「发完就返回」，那是调用方明确要的语义
+    const waitMs = args.waitMs === undefined ? 1_000 : Math.min(Math.max(Number(args.waitMs) || 0, 0), 10_000)
     // 要同步等终态：先扣住自动回报，否则进程在这段等待里退出时，
     // exit 回调会即时 flush 一条回报，抢在下面的 suppressReport 之前
-    const watch = stopped && (args.waitMs ?? 0) > 0
+    const watch = stopped && waitMs > 0
     if (watch) task.reportHold = true
-    const settled = stopped ? await waitForTerminal(task, args.waitMs ?? 0) : true
+    const settled = stopped ? await waitForTerminal(task, waitMs) : true
     if (watch) delete task.reportHold
     // 结果已经在这个工具返回里交付了：撤掉排队中的自动回报，否则稍后又来一条一样的
     if (stopped && settled) suppressReport(task, '已在 bg_stop 中同步拿到终态')
@@ -287,7 +293,7 @@ export const tools = {
       ? `${task.id} 已经不在运行（当前状态：${statusText(task)}），无需停止。`
       : settled
         ? `${task.id} 已停止（${stopReasonText(task)}），耗时 ${fmtDuration(details.durationMs)}。exitCode 为 null——判断结果请看 status，被杀掉的进程退出码没有意义。`
-        : `${task.id} 已发出停止请求，但 ${args.waitMs}ms 内还没退出。稍后用 bg_list 确认，或传更大的 waitMs。`
+        : `${task.id} 已发出停止请求，但 ${waitMs}ms 内还没退出。稍后用 bg_list 确认，或传更大的 waitMs。`
     return { text, details }
   },
 

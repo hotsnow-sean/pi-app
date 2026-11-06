@@ -1,5 +1,6 @@
 // 用 jsdom 环境只是因为全局 setup 会摸 window；被测代码是纯 node（子进程 + fs）
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -77,6 +78,46 @@ async function waitDone(id, timeoutMs = 30_000) {
   throw new Error(`task ${id} did not finish in ${timeoutMs}ms`)
 }
 
+/** 与 lib/shell.mjs 同源的 bash 落点（测试里不 import，免得和 ?v= 版本混出两个实例） */
+const BASH =
+  process.platform === 'win32'
+    ? [
+        'C:\\Program Files\\Git\\bin\\bash.exe',
+        'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+        path.join(process.env.LOCALAPPDATA || '', 'Programs\\Git\\bin\\bash.exe'),
+      ].find((candidate) => candidate && fs.existsSync(candidate))
+    : fs.existsSync('/bin/bash')
+      ? '/bin/bash'
+      : '/bin/sh'
+
+/** 等条件成立（pidfile 是 bash 启动后才写的，不能立刻读） */
+async function waitUntil(fn, timeoutMs = 5_000, stepMs = 50) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (fn()) return true
+    await new Promise((resolve) => setTimeout(resolve, stepMs))
+  }
+  return false
+}
+
+/** MSYS/POSIX 进程组里还有没有活口——报告 §1.1 的关键断言 */
+function groupAlive(pgid) {
+  if (!Number.isInteger(pgid) || pgid <= 0) return false
+  const probe = spawnSync(BASH, ['-c', `kill -0 -${pgid} 2>/dev/null`], { windowsHide: true })
+  return probe.status === 0
+}
+
+/** 任务的进程组 id：Windows 在 pidfile 里（MSYS 的 $$），POSIX 上 detached 后就是 pid */
+function pgidOf(taskId, pid) {
+  if (process.platform !== 'win32') return pid
+  const file = path.join(dataDir, 'logs', `${taskId}.pid`)
+  try {
+    return Number.parseInt(fs.readFileSync(file, 'utf8').trim(), 10) || 0
+  } catch {
+    return 0
+  }
+}
+
 beforeEach(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-plugin-test-'))
   sent = []
@@ -84,7 +125,6 @@ beforeEach(async () => {
   settingsChangeCb = null
   handle = await activate(fakeCtx())
 })
-
 afterEach(async () => {
   await deactivate()
   fs.rmSync(dataDir, { recursive: true, force: true })
@@ -141,6 +181,63 @@ describe('pagination and stop semantics', () => {
     expect(stopped.details.status).toBe('stopped')
     expect(stopped.details.exitCode).toBeNull()
     expect(stopped.text).toContain('已停止')
+  }, 60_000)
+})
+
+/**
+ * 报告 §1.1 的回归：`bg_stop force` 返回「已停止」，但最内层 sleep 还在跑、
+ * 日志被锁删不掉。根因不是写法而是 Windows 侧父子链断了（Git Bash 的 fork 把子进程的
+ * 父 PID 指向已退出的 helper），只能按 MSYS 进程组收。这三条用例起真进程验证。
+ */
+describe('process tree termination', () => {
+  it('kills the whole process group instead of orphaning the innermost command', async () => {
+    const res = await start({ command: 'sleep 120', label: '深睡' })
+    const id = res.details.id
+    // pidfile 是 bash 起来之后才写的，不能立刻读
+    expect(await waitUntil(() => pgidOf(id, res.details.pid) > 0)).toBe(true)
+    const pgid = pgidOf(id, res.details.pid)
+    expect(groupAlive(pgid)).toBe(true)
+
+    const stopped = await handle.invoke('tool.execute', {
+      name: 'bg_stop',
+      args: { id, force: true, waitMs: 8_000 },
+      sessionFile: 's1.jsonl',
+    })
+    expect(stopped.details.settled).toBe(true)
+    expect(stopped.details.status).toBe('stopped')
+    // 修前这里会是 true：launcher 被 taskkill 收掉，sleep 留在 MSYS 组里继续睡
+    expect(await waitUntil(() => !groupAlive(pgid), 2_000)).toBe(true)
+  }, 60_000)
+
+  it('escalates the timeout path to the same group kill', async () => {
+    const res = await start({ command: 'sleep 120', label: '超时深睡', timeoutSeconds: 5 })
+    const id = res.details.id
+    expect(await waitUntil(() => pgidOf(id, res.details.pid) > 0)).toBe(true)
+    const pgid = pgidOf(id, res.details.pid)
+
+    const task = await waitDone(id, 25_000)
+    expect(task.status).toBe('stopped')
+    expect(task.stopReason).toBe('timeout')
+    // 超时链路与手停共用 stopTask：能杀干净才算共用
+    expect(await waitUntil(() => !groupAlive(pgid), 3_000)).toBe(true)
+  }, 60_000)
+
+  it('leaves no task files behind and says so in the clean-up receipt', async () => {
+    const res = await start({ command: 'sleep 120', label: '清掉' })
+    const id = res.details.id
+    expect(await waitUntil(() => pgidOf(id, res.details.pid) > 0)).toBe(true)
+
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { keepRunning: false },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.cleared).toBe(1)
+    // 进程树收干净了，回执就不该出现「文件被占用」——反过来，真的删不掉时必须说
+    expect(cleared.details.stuckFiles ?? 0).toBe(0)
+    expect(cleared.text).not.toContain('仍被进程占用')
+    const leftovers = fs.readdirSync(path.join(dataDir, 'logs')).filter((name) => name.startsWith(`${id}.`))
+    expect(leftovers).toEqual([])
   }, 60_000)
 })
 

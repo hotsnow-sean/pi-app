@@ -4,9 +4,13 @@
  * 后台任务 — main 侧服务（入口）。
  *
  * 给会话一套「起长命令、干别的、跑完自己回来汇报」的能力。pi 内置的 bash 工具是
- * 同步等待的，长命令会把一轮对话卡死；这里把命令交给 shell 起在后台（刻意不 detached，
- * Electron 主进程里 detached 子进程会「起了但从不退出、也没有输出」）、输出直写日志文件，
- * 任务结束时通过 ctx.sessions.send 把结果投回发起它的那个会话。
+ * 同步等待的，长命令会把一轮对话卡死；这里把命令交给 shell 起在后台、输出直写日志
+ * 文件，任务结束时通过 ctx.sessions.send 把结果投回发起它的那个会话。
+ *
+ * 子进程的 detached 按平台分叉：Windows 上刻意不 detached（Electron 主进程里
+ * detached 子进程会「起了但从不退出、也没有输出」），停止时靠 pidfile 里的 MSYS
+ * 进程组 id 整组收——`taskkill /T` 在 MSYS 树上杀不到最内层，见 lib/tasks.mjs
+ * 的 stopTask；POSIX 上必须 detached，子进程当组长，`kill(-pid)` 才真的收整组。
  *
  * 契约：
  *   invoke('tool.execute', { name, args, sessionFile, cwd, signal }) → { text, details? }

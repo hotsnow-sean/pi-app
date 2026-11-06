@@ -100,8 +100,12 @@ function bashQuote(p) {
  *
  * stdout 与 stderr 分成两个文件：失败时只需读几百字节的 stderr，不必在几万行
  * 正常输出里翻错误。两者都用 >> 追加，文件预先建空，等价于覆盖。
+ *
+ * pidfile（只有 Windows 的 bash 分支写）：`echo $$` 落盘的 msys pid 同时就是
+ * MSYS 的进程组 id，停止时要靠它 `kill -9 -<pgid>` 收整组——Windows 的
+ * taskkill /T 在 MSYS 树上杀不到最内层（见 tasks.mjs stopTask 的注释）。
  */
-export function buildSpawnSpec({ command, logPath, errPath, requestedShell, id }) {
+export function buildSpawnSpec({ command, logPath, errPath, pidPath, requestedShell, id }) {
   const want = String(requestedShell || 'auto').toLowerCase()
 
   if (process.platform !== 'win32') {
@@ -111,6 +115,10 @@ export function buildSpawnSpec({ command, logPath, errPath, requestedShell, id }
       file: file || '/bin/sh',
       args: ['-c', `(${command}) >> ${bashQuote(logPath)} 2>> ${bashQuote(errPath)}`],
       line: null,
+      // POSIX 上必须 detached：非 detached 的子进程留在宿主的进程组里，
+      // `kill(-pid)` 根本指不到它（pid ≠ pgid），收整组只能靠 setsid
+      detached: true,
+      pidFile: null,
     }
   }
 
@@ -127,6 +135,9 @@ export function buildSpawnSpec({ command, logPath, errPath, requestedShell, id }
       file: null,
       args: null,
       line: `chcp 65001>nul & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}" >> "${logPath}" 2>> "${errPath}"`,
+      // 原生 Windows 进程树的父链是完整的，taskkill /T 就够，不需要 pidfile
+      detached: false,
+      pidFile: null,
     }
   }
 
@@ -137,6 +148,8 @@ export function buildSpawnSpec({ command, logPath, errPath, requestedShell, id }
       file: null,
       args: null,
       line: `chcp 65001>nul & (${command}) >> "${logPath}" 2>> "${errPath}"`,
+      detached: false,
+      pidFile: null,
     }
   }
 
@@ -145,11 +158,20 @@ export function buildSpawnSpec({ command, logPath, errPath, requestedShell, id }
     throw new Error("找不到 bash（Git Bash 未安装或不在常见路径）。改用 shell:'cmd'，或先装 Git for Windows。")
   }
   if (bash) {
+    // `echo $$` 先落 pidfile 再跑命令：MSYS 上 $$ 就是进程组 id（实测 PGID == PID），
+    // 停止时靠它整组收。用 `;` 而不是 `&&`——pidfile 写不成不该拖累任务本身。
+    // 刻意不 detached：Electron 主进程里 detached 子进程会「起了但从不退出」，
+    // Windows 这一侧只能走 MSYS 组杀（见 tasks.mjs stopTask）
     return {
       kind: 'bash',
       file: bash,
-      args: ['-c', `(${command}) >> ${bashQuote(logPath)} 2>> ${bashQuote(errPath)}`],
+      args: [
+        '-c',
+        `${pidPath ? `echo $$ > ${bashQuote(pidPath)}; ` : ''}(${command}) >> ${bashQuote(logPath)} 2>> ${bashQuote(errPath)}`,
+      ],
       line: null,
+      detached: false,
+      pidFile: pidPath || null,
     }
   }
   // 没有 bash 才回落 cmd：此时必须拦住 bash 语法，避免静默错执行
@@ -159,5 +181,7 @@ export function buildSpawnSpec({ command, logPath, errPath, requestedShell, id }
     file: null,
     args: null,
     line: `chcp 65001>nul & (${command}) >> "${logPath}" 2>> "${errPath}"`,
+    detached: false,
+    pidFile: null,
   }
 }
