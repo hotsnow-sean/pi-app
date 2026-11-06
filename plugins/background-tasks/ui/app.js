@@ -186,12 +186,21 @@ const ICON_CHEV =
 function reportBadge(task) {
   if (task.status === 'running') return ''
   if (task.report === 'queued') return '<span class="report-badge sent">已投递</span>'
-  if (task.report === 'failed') return '<span class="report-badge failed">回报失败</span>'
+  if (task.report === 'failed')
+    return `<span class="report-badge failed" title="${esc(task.reportError || '')}">回报失败</span>`
   // 为什么没回报要能一眼看到：规则不透明比不回报更让人困惑
   if (task.report === 'skipped' || task.report === 'suppressed')
     return `<span class="report-badge" title="${esc(task.reportNote || '按当前回报策略跳过')}">未回报</span>`
   if (task.report === 'pending') return '<span class="report-badge">待回报</span>'
   return ''
+}
+
+/** 面板只给「还没成功投递过、且任务已结束」的给出重新回报入口。
+ *  lost 无条件给：宿主重启后进程没了，日志尾巴也不完整，用户/模型往往需要手动补一次。 */
+function canRetryReport(task) {
+  if (task.status === 'running') return false
+  if (task.status === 'lost') return true
+  return task.report === 'failed' || task.report === 'skipped' || task.report === 'suppressed'
 }
 
 function rowHtml(task) {
@@ -224,7 +233,7 @@ function rowHtml(task) {
         ${reportBadge(task)}
         ${task.timeoutMs ? `<span class="report-badge">超时 ${fmtDuration(task.timeoutMs)}</span>` : ''}
         <span class="path" title="${esc(task.logPath)}">${esc(task.logPath)}${size ? ` · ${size}` : ''}</span>
-        ${task.report === 'failed' || task.report === 'skipped' || task.report === 'suppressed' ? `<button class="link-btn" data-act="retry" data-id="${esc(task.id)}">重新回报</button>` : ''}
+        ${canRetryReport(task) ? `<button class="link-btn" data-act="retry" data-id="${esc(task.id)}">重新回报</button>` : ''}
         ${running ? `<button class="link-btn" data-act="stop" data-id="${esc(task.id)}">停止</button>` : `<button class="link-btn" data-act="rerun" data-id="${esc(task.id)}">重跑</button><button class="link-btn" data-act="remove" data-id="${esc(task.id)}">删除记录</button>`}
       </div>
     </div>
@@ -317,6 +326,9 @@ async function tick() {
   busy = true
   try {
     const res = await api('listTasks')
+    // 错误横幅只在 rebuild() 里画：上一拍失败、这一拍恢复正常但列表签名没变，
+    // 走 updateMeta() 就会把红框永久挂在那儿。清空 lastError 时一并要求重绘。
+    const hadError = Boolean(lastError)
     lastError = ''
     state.tasks = Array.isArray(res.tasks) ? res.tasks : []
     state.policy = String(res.policy || 'long')
@@ -337,7 +349,7 @@ async function tick() {
     }
     const visible = visibleTasks()
     const signature = visible.map((t) => `${t.id}:${t.status}:${t.report}`).join(',')
-    if (signature !== lastSignature) {
+    if (signature !== lastSignature || hadError) {
       lastSignature = signature
       if (state.open && !visible.some((t) => t.id === state.open)) state.open = null
       rebuild()

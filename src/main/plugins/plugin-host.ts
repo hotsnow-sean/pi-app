@@ -33,6 +33,14 @@ type PluginInstance = {
   dir: string
   instance: { invoke?: (method: string, params: Record<string, unknown>) => Promise<unknown> }
   deactivate?: () => unknown
+  /**
+   * 插件通过 ctx 注册的订阅（设置变更 / 会话运行事件）的解除函数。
+   *
+   * 为什么必须由宿主登记：插件丢掉了返回值（`ctx.settings.onChange(cb)` 是最自然的写法），
+   * 于是每「停用→启用」一次就多一个闭包攥着上一个模块实例——开发期热更十次就是十个，
+   * 旧模块永远不会被 GC，旧回调还会继续被调用。宿主统一回收是唯一可靠的兜底。
+   */
+  disposers: Array<() => void>
 }
 
 const active = new Map<string, PluginInstance>()
@@ -98,7 +106,22 @@ async function runAgentPrompt(opts: {
   }
 }
 
-function buildContext(pluginId: string) {
+/**
+ * 造一份插件 ctx。
+ *
+ * `disposers` 由调用方（activatePlugin）持有并在停用时统一执行：ctx 上任何
+ * **注册型**能力都必须把解除函数塞进去，插件侧丢不丢返回值都不影响回收。
+ */
+function buildContext(pluginId: string, disposers: Array<() => void>) {
+  /** 登记一个订阅：插件主动解除时同时从登记表里摘掉，避免重复解 */
+  const track = (off: () => void): (() => void) => {
+    disposers.push(off)
+    return () => {
+      const index = disposers.indexOf(off)
+      if (index >= 0) disposers.splice(index, 1)
+      off()
+    }
+  }
   return {
     pluginId,
     /**
@@ -126,9 +149,11 @@ function buildContext(pluginId: string) {
     settings: {
       get: (): Record<string, unknown> => getPluginSettings(pluginId),
       onChange: (callback: (values: Record<string, unknown>) => void): (() => void) =>
-        onPluginSettingsChanged((changedId, values) => {
-          if (changedId === pluginId) callback(values)
-        }),
+        track(
+          onPluginSettingsChanged((changedId, values) => {
+            if (changedId === pluginId) callback(values)
+          }),
+        ),
     },
     notify: (title: string, body?: string): void => {
       try {
@@ -217,7 +242,7 @@ function buildContext(pluginId: string) {
         handler: (payload: { sessionFile: string; phase: string; cwd: string }) => void,
       ): (() => void) => {
         if (typeof handler !== 'function') throw new Error('sessions.onRunEvent: handler required')
-        return workerManager.onSessionRunEvent(handler)
+        return track(workerManager.onSessionRunEvent(handler))
       },
     },
     log: (...args: unknown[]): void => console.log(`[plugin:${pluginId}]`, ...args),
@@ -236,6 +261,7 @@ export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; e
     // 纯 UI 插件可以没有 main
     return { ok: true }
   }
+  const disposers: Array<() => void> = []
   try {
     // Node 的 ESM 缓存以 URL 为键：把入口文件的 mtime 编进 query，插件改动后
     // 「停用 → 启用」就能拿到新模块，不必重启应用。
@@ -248,42 +274,60 @@ export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; e
       activate?: (ctx: unknown) => Promise<unknown> | unknown
       deactivate?: () => unknown
     }
-    const ctx = buildContext(pluginId)
+    const ctx = buildContext(pluginId, disposers)
     const instance = (await mod.activate?.(ctx)) ?? {}
     active.set(pluginId, {
       manifest,
       dir: found.dir,
       instance: instance as PluginInstance['instance'],
       deactivate: () => mod.deactivate?.(),
+      disposers,
     })
     return { ok: true }
   } catch (error) {
+    // 激活失败：ctx 可能已经登记过订阅，别把孤儿闭包留在宿主里
+    disposeAll(disposers)
     console.error(`[plugin-host] activate ${pluginId} failed:`, error)
     return { ok: false, error: errorMessage(error) }
   }
 }
 
-export function deactivatePlugin(pluginId: string): void {
+function disposeAll(disposers: Array<() => void>): void {
+  for (const dispose of disposers.splice(0)) {
+    try {
+      dispose()
+    } catch (error) {
+      console.warn('[plugin-host] dispose failed:', error)
+    }
+  }
+}
+
+export async function deactivatePlugin(pluginId: string): Promise<void> {
   const instance = active.get(pluginId)
   if (!instance) return
   active.delete(pluginId)
+  // 先让插件自己收尾再回收订阅：插件的 deactivate 里可能还要读设置、停子进程。
+  // 必须 await——开发期「停用→启用」用的就是这条路径，异步清理没跑完就 re-activate
+  // 会和它抢同一份磁盘状态。
+  try {
+    await instance.deactivate?.()
+  } catch (error) {
+    console.warn(`[plugin-host] deactivate ${pluginId} failed:`, error)
+  }
+  // 插件自己解不解订阅都无所谓，这里统一收：漏一个就是一次模块实例泄漏
+  disposeAll(instance.disposers)
   // 停用即收回它伸出去的手：挂着的对话框与会话里的工具调用都该结束，别把用户卡在弹窗里
   cancelPluginUIRequests(pluginId)
   cancelPluginToolCallsFor(pluginId)
   // 它推着的托盘也一样：插件都没了，输入框上方不该留一条没人再更新的摘要
   clearPluginComposerBars(pluginId)
-  try {
-    void instance.deactivate?.()
-  } catch (error) {
-    console.warn(`[plugin-host] deactivate ${pluginId} failed:`, error)
-  }
 }
 
 /** 启停：更新持久化状态并 activate / deactivate */
 export async function applyPluginEnabled(pluginId: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> {
   setPluginEnabled(pluginId, enabled)
   if (enabled) return activatePlugin(pluginId)
-  deactivatePlugin(pluginId)
+  await deactivatePlugin(pluginId)
   return { ok: true }
 }
 
@@ -317,9 +361,13 @@ export async function invokePlugin(
 export function resolvePluginPanelEntry(pluginId: string, entry: string): string | null {
   const found = findPlugin(pluginId)
   if (!found || !found.manifest) return null
-  const full = path.resolve(found.dir, entry)
   const root = path.resolve(found.dir)
-  if (!full.startsWith(root)) return null // 防路径穿越
+  const full = path.resolve(root, entry)
+  // 防路径穿越：不能用 startsWith 比前缀——`../bg-evil/x` 解析后是 `<父目录>/bg-evil/x`，
+  // 仍然以 `/plugins/bg` 开头。relative 出来以 .. 开头才是真的出界（Windows 上大小写
+  // 不同也不会误判，因为两边都由 path.resolve 归一化了）。
+  const rel = path.relative(root, full)
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null
   return full
 }
 

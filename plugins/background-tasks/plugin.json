@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -304,7 +304,7 @@
       "key": "maxLogMb",
       "type": "number",
       "label": "单个任务日志上限（MB）",
-      "description": "输出超过上限后会停止写入主日志，避免磁盘被刷爆。",
+      "description": "单个任务的 stdout+stderr 合计超过上限就终止该任务（不是只截断日志），避免磁盘被刷爆。",
       "default": 50,
       "min": 1,
       "max": 500,
