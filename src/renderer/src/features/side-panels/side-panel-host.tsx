@@ -28,7 +28,14 @@ export function SidePanelHost({ item }: { item: RightPanelCatalogItem | undefine
   if (item.adapterId) {
     // 应用级插件面板：pi-plugin:// iframe 容器（独立于 adapter 渲染体系）
     if (isPluginAdapterId(item.adapterId)) {
-      return <PluginPanelFrame pluginId={pluginIdFromAdapterId(item.adapterId)} panelId={item.id} title={item.fallbackLabel} />
+      return (
+        <PluginPanelFrame
+          pluginId={pluginIdFromAdapterId(item.adapterId)}
+          panelId={item.id}
+          placement="panel"
+          title={item.fallbackLabel}
+        />
+      )
     }
     const comp = item.panelComponent || 'generic-json'
     const Panel = ADAPTER_PANEL_COMPONENTS[comp] || GenericAdapterSidePanel

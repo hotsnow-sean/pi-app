@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -70,7 +70,7 @@
     {
       "name": "bg_output",
       "label": "读取后台任务输出",
-      "description": "Read a background task's output. Call it with only an id to get the tail; to read only what is new, pass offset — the nextOffset a previous reply gave you. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically. If you need to give a task a moment to produce output, pass waitMs instead of calling bash sleep.",
+      "description": "Read a background task's output. Call it with only an id to get the tail; to read only what is new, pass offset — the nextOffset a previous reply gave you. Use it when the user asks what a task is doing, or when a task has failed and you need the error before deciding what to do. Do not poll it in a loop — completions are delivered to you automatically. If you need to give a task a moment to produce output, pass waitMs instead of calling bash sleep. Only tasks started in this session can be read.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -123,7 +123,7 @@
     {
       "name": "bg_stop",
       "label": "停止后台任务",
-      "description": "Stop a running background task and its whole process tree. Use it when the user asks to abandon something, or when a task is clearly stuck or was started by mistake. Pass waitMs to get the final state in the same call instead of querying again. A stopped task reports exitCode null on purpose — judge the outcome by status, not by the exit code of a killed process.",
+      "description": "Stop a running background task started in this session, together with its whole process tree. Use it when the user asks to abandon something, or when a task is clearly stuck or was started by mistake. Pass waitMs to get the final state in the same call instead of querying again. A stopped task reports exitCode null on purpose — judge the outcome by status, not by the exit code of a killed process.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -152,7 +152,7 @@
     {
       "name": "bg_list",
       "label": "列出后台任务",
-      "description": "List background tasks with their status, duration and exit code. Use it at the start of a conversation to see what is already running, or when the user asks 'what is still going'. Status 'lost' means the host restarted and the process could not be found again — it can only appear after a host restart, never mid-session, so there is no way to trigger it on demand.",
+      "description": "List background tasks started in this session, with their status, duration and exit code. Use it at the start of a conversation to see what is already running, or when the user asks 'what is still going'. Tasks from other sessions are not listed — the background-tasks app view shows all of them. Status 'lost' means the host restarted and the process could not be found again — it can only appear after a host restart, never mid-session, so there is no way to trigger it on demand.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -185,7 +185,7 @@
     {
       "name": "bg_rerun",
       "label": "重跑后台任务",
-      "description": "Run a finished background task again with the same command, cwd, shell and timeout. Use it after fixing whatever made it fail, or when the user says 'run that again'. It always creates a NEW task id (the old record keeps its own result), so quote the new id when talking about it. Cannot rerun a task that is still running — stop it first.",
+      "description": "Run a finished background task again with the same command, cwd, shell and timeout. Use it after fixing whatever made it fail, or when the user says 'run that again'. It always creates a NEW task id (the old record keeps its own result), so quote the new id when talking about it. Cannot rerun a task that is still running — stop it first. Only tasks started in this session can be rerun.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -206,7 +206,7 @@
     {
       "name": "bg_clear",
       "label": "清理后台任务记录",
-      "description": "Delete finished task records (and their log files) from the list. Running tasks are kept by default — clearing is for tidying up, not for stopping work; tasks skipped this way are reported back. Pass ids (string or array) to clear specific tasks; unknown ids are reported back as 'missing' instead of failing. Without ids, status filters which finished tasks are cleared. Set keepRunning:false to also stop and delete running tasks.",
+      "description": "Delete finished task records (and their log files) from this session's list. Running tasks are kept by default — clearing is for tidying up, not for stopping work; tasks skipped this way are reported back. Records from other sessions are left alone; the app view can clear everything. Pass ids (string or array) to clear specific tasks; unknown ids are reported back as 'missing' instead of failing. Without ids, status filters which finished tasks are cleared. Set keepRunning:false to also stop and delete running tasks.",
       "parameters": {
         "type": "object",
         "properties": {

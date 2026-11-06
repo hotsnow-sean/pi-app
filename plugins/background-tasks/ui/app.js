@@ -16,10 +16,13 @@ const bridge = window.pi || {
 const api = (method, params) => bridge.invoke(method, params)
 
 // 面板严格跟当前会话走（宿主在会话切换时会重推 context）
+// placement 告诉这份 UI 自己挂在哪儿：中央视图是应用入口（全局），右栏是会话内视图。
 bridge.on('context', (context) => {
   const sf = context && typeof context === 'object' ? String(context.sessionFile || '') : ''
-  if (sf === state.sessionFile) return
+  const placement = context && typeof context === 'object' ? String(context.placement || 'panel') : 'panel'
+  if (sf === state.sessionFile && placement === state.placement) return
   state.sessionFile = sf
+  state.placement = placement
   state.open = null
   lastSignature = null
   rebuild()
@@ -46,8 +49,14 @@ window.addEventListener('keydown', (event) => {
 
 const state = {
   tasks: [],
-  /** 当前会话（宿主经 plugin-context 推送）：面板严格只显示这个会话的任务 */
+  /** 当前会话（宿主经 plugin-context 推送）：右栏面板严格只显示这个会话的任务 */
   sessionFile: '',
+  /**
+   * 落点：'center' | 'panel' | 'sessionBar'。
+   * 中央视图是应用入口，展示全部任务（跨会话管理在这里做）；右栏面板只跟本会话。
+   * 缺省按 'panel'——收缩的那一侧，不会因为宿主忘了传就把别人的任务摆出来。
+   */
+  placement: 'panel',
   open: null,
   /** `${id}:${stream}` → { offset, text }：每个流独立的增量读游标 */
   outputs: new Map(),
@@ -150,9 +159,20 @@ if (typeof window !== 'undefined') {
   window.__sessionMatch = { normSession, sameSession }
 }
 
-/** 面板只看当前会话 */
+/** 面板只看当前会话；应用入口（中央视图）是全局视图，一次看全 */
 function visibleTasks() {
+  if (state.placement === 'center') return state.tasks
   return state.tasks.filter((t) => sameSession(t.sessionFile, state.sessionFile))
+}
+
+/**
+ * 会话标识（只在应用入口显示）：跨会话视图里不标归属，用户分不清哪条是哪条。
+ * 用文件名而不是路径前缀——同一工作区的会话共享前缀，看前缀等于没看。
+ */
+function sessionLabel(sessionFile) {
+  const base = String(sessionFile || '').replace(/\\/g, '/').split('/').pop() || ''
+  const name = base.replace(/\.jsonl$/i, '')
+  return name.length > 22 ? `${name.slice(0, 21)}…` : name
 }
 
 // ---------- 渲染 ----------
@@ -209,6 +229,7 @@ function rowHtml(task) {
       ${tabs}
       <pre class="out${stream === 'err' ? ' err' : ''}" data-out="${esc(task.id)}"></pre>
       <div class="foot">
+        ${state.placement === 'center' && task.sessionFile ? `<span class="report-badge" title="${esc(task.sessionFile)}">${esc(sessionLabel(task.sessionFile))}</span>` : ''}
         ${reportBadge(task)}
         ${task.timeoutMs ? `<span class="report-badge">超时 ${fmtDuration(task.timeoutMs)}</span>` : ''}
         <span class="path" title="${esc(task.logPath)}">${esc(task.logPath)}${size ? ` · ${size}` : ''}</span>
@@ -228,14 +249,14 @@ function rebuild() {
     <h1>后台任务</h1>
     <span class="count" data-field="count">${counts ? `${counts} 个运行中` : `${tasks.length} 条记录`}</span>
     <span class="spacer"></span>
-    ${finished ? '<button class="ghost-btn" data-act="clear">清空已结束</button>' : ''}
+    ${finished ? `<button class="ghost-btn" data-act="clear">${state.placement === 'center' ? '清空全部已结束' : '清空已结束'}</button>` : ''}
     <span class="policy" data-field="policy">完成后：${esc(POLICY_TEXT[state.policy] || state.policy)}</span>
   </div>`
   if (!tasks.length) {
     const err = lastError
       ? `<div class="empty" style="border-color:var(--err);color:var(--err)"><strong>读不到任务列表</strong>${esc(lastError)}</div>`
       : state.tasks.length
-        ? `<div class="empty"><strong>当前会话没有后台任务</strong>其它会话还有 ${state.tasks.length} 条记录；这里的列表只跟着本会话走。</div>`
+        ? `<div class="empty"><strong>当前会话没有后台任务</strong>其它会话还有 ${state.tasks.length} 条记录；这里的列表只跟着本会话走，全部任务在「后台任务」入口里。</div>`
         : `<div class="empty"><strong>还没有后台任务</strong>让 agent 跑个长命令，它会出现在这里；跑完还能自己把结果说完。</div>`
     root.innerHTML = `${head}${err}`
     lastSignature = ''

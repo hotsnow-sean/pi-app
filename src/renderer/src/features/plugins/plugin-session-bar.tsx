@@ -25,6 +25,7 @@ export function PluginSessionBar() {
           key={`${bar.pluginId}:${bar.id}`}
           pluginId={bar.pluginId}
           panelId={`plugin:${bar.pluginId}:${bar.id}`}
+          placement="sessionBar"
           title={bar.title}
           entry={bar.entry}
           sizing="content"

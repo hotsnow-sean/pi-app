@@ -120,10 +120,18 @@ function installHost() {
   })
 }
 
-function pushContext(sessionFile) {
+function pushContext(sessionFile, placement) {
   window.dispatchEvent(
     new MessageEvent('message', {
-      data: { type: 'plugin-context', context: { sessionFile, sessionId: 'aaaa', workspace: 'C:/ws/demo' } },
+      data: {
+        type: 'plugin-context',
+        context: {
+          sessionFile,
+          sessionId: 'aaaa',
+          workspace: 'C:/ws/demo',
+          ...(placement ? { placement } : {}),
+        },
+      },
     }),
   )
 }
@@ -199,6 +207,22 @@ describe('后台任务面板 UI', () => {
 
     expect(calls.find((c) => c.method === 'clearTasks').params.ids).toEqual(['mine'])
     expect(store.map((t) => t.id)).toEqual(['theirs'])
+  })
+
+  it('应用入口（center）展示全部会话，行内标出归属，清理是全部语义', async () => {
+    store = [task('mine'), task('theirs', { sessionFile: OTHER })]
+    loadUi()
+    pushContext(SESSION, 'center')
+    await waitFor(() => rows().length === 2, '入口应展示两条')
+
+    // 跨会话视图里不标归属，用户分不清哪条是哪条
+    expect(document.querySelector('#app').textContent).toContain('bbbb')
+    const clearBtn = document.querySelector('#app [data-act="clear"]')
+    expect(clearBtn.textContent).toContain('全部')
+
+    clearBtn.click()
+    await waitFor(() => rows().length === 0, '入口清空全部已结束')
+    expect(calls.find((c) => c.method === 'clearTasks').params.ids.sort()).toEqual(['mine', 'theirs'])
   })
 
   it('P3-4：ui 与 main 的 normSession/sameSession 等价（两份实现，一份语义）', async () => {

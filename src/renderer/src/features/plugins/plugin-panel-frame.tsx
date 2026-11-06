@@ -11,10 +11,19 @@ import { PLUGIN_BRIDGE_PROTOCOL } from '@shared/plugin-bridge'
  */
 const MAX_CONTENT_HEIGHT = 400
 
+/**
+ * 插件 UI 的落点。同一份 `ui/index.html` 会被挂到三个地方，插件需要据此决定
+ * 「展示范围」这类作用域问题：中央视图是全局入口（可以看全部），右栏面板与会话条
+ * 都跟着当前会话走。宿主不替插件判断该显示什么，只如实告诉它「你在哪儿」。
+ */
+export type PluginFramePlacement = 'center' | 'panel' | 'sessionBar'
+
 export type PluginPanelFrameProps = {
   pluginId: string
   /** 完整 panel/view id（plugin:<pluginId>:<id>），透传给插件 UI */
   panelId: string
+  /** 落点；随 plugin-context 下发。默认「右栏面板」——三种里最会话内的一种 */
+  placement?: PluginFramePlacement
   title?: string
   /** 入口文档，相对插件目录；右栏与中央视图共用同一份 UI 时留默认值 */
   entry?: string
@@ -44,7 +53,7 @@ export type PluginPanelFrameProps = {
  *   ← { type: 'plugin-open-panel-result', requestId, ok }
  *   ← { type: 'plugin-theme', vars: Record<string,string> }  主题 token（含自定义主题），切换/修改时重推
  *   ← { type: 'plugin-settings', values: Record<string,unknown> }  声明式设置项的值，握手时下发一次
- *   ← { type: 'plugin-context', context: { workspacePath, sessionFile, sessionId } }  当前工作区/会话
+ *   ← { type: 'plugin-context', context: { workspacePath, sessionFile, sessionId, placement } }  当前工作区/会话/落点
  *   ← { type: 'plugin-dispose', reason }                 面板卸载：让桥 reject 掉挂起的调用
  *
  * 主题不进握手依赖：iframe load 后无条件补推一次，插件 UI 忘了发 hello 也不会停在自带兜底色上。
@@ -114,6 +123,7 @@ function resolveColor(raw: string): string {
 export function PluginPanelFrame({
   pluginId,
   panelId,
+  placement = 'panel',
   title,
   entry,
   sizing = 'fill',
@@ -131,8 +141,9 @@ export function PluginPanelFrame({
   const workspacePath = useUIStore((s) => s.currentWorkspace)
   const sessionFile = useUIStore((s) => s.historySessionFile)
   const sessionId = useUIStore((s) => s.currentSessionId)
-  const contextRef = useRef({ workspacePath, sessionFile, sessionId })
-  contextRef.current = { workspacePath, sessionFile, sessionId }
+  // placement 是落点，不是状态：不进 store，跟着这个 frame 的生命周期走
+  const contextRef = useRef({ workspacePath, sessionFile, sessionId, placement })
+  contextRef.current = { workspacePath, sessionFile, sessionId, placement }
 
   useEffect(() => {
     readySentRef.current = false

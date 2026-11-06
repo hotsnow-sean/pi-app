@@ -227,7 +227,7 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 **线上协议**（宿主 ↔ 桥，插件作者不用碰，改这里要同步 `plugin-panel-frame.tsx` 的注释）：
 
 - 宿主 → 插件：`plugin-ready`（`{ panelId, protocol }`）、`plugin-theme`（CSS 变量）、
-  `plugin-settings`（声明式设置值）、`plugin-context`（`{ workspacePath, sessionFile, sessionId }`，
+  `plugin-settings`（声明式设置值）、`plugin-context`（`{ workspacePath, sessionFile, sessionId, placement }`，
   切会话/切工作区时重推）、`plugin-invoke-result`、`plugin-open-panel-result`、`plugin-dispose`。
 - 插件 → 宿主：`plugin-hello`、`plugin-invoke`、`plugin-open-panel`、`plugin-key`、
   `plugin-content-height`。
@@ -237,6 +237,19 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 **会话条的两条约定**：
 1. 归属判断由插件自己做——宿主不做反查，也不预判空态。插件报 0 就等于「这里没我事」。
 2. 右上角有宿主的浮层按钮（28×28，落在 44px 条内），内容最右端要自行避让约 40–48px。
+
+**`placement`：同一份 HTML 的三种落点**。宿主不替插件判断「该显示哪些数据」，只如实
+告诉它自己挂在哪儿：
+
+| 值 | 落点 | 语义 |
+| --- | --- | --- |
+| `center` | 左栏应用入口打开的中央视图（`views[]`） | **全局视图**：可以展示跨会话的全部数据，是用户做全局管理的地方 |
+| `panel` | 右栏面板（`panels[]`） | **会话内视图**：只跟当前 `sessionFile` |
+| `sessionBar` | 对话顶部的会话条（`sessionBars[]`） | 同上，会话内 |
+
+缺省按 `panel` 处理（收缩的那一侧）——宿主漏传时不会把别的会话的数据摆出来。同一条
+「收缩」惯例也适用于插件工具：`tool.execute` 的 `meta.sessionFile` 是**发起调用的会话**，
+跨会话的读写不该由工具顺手做（后台任务的 `bg_*` 就是这么收的，见其设计文档）。
 
 ### 6.2 输入框托盘（`ctx.ui.setComposerBar`）
 

@@ -22,6 +22,7 @@ const { markDeleted, deliver } = await imp('report')
 const { startTask, stopTask: stopTaskCore, clearTimeoutFor, waitForTerminal } = await imp('tasks')
 const { composerBarFor, pushComposerBar, pushBarForTask } = await imp('compose-bar')
 const { removeTaskFiles, sweepOrphanFiles } = await imp('files')
+const { sameSession } = await imp('format')
 
 /**
  * 会话条点开某条任务时，右栏面板要「自动翻到那一条」。
@@ -29,6 +30,17 @@ const { removeTaskFiles, sweepOrphanFiles } = await imp('files')
  * 不落盘——这是「谁在看什么」的界面状态，不是任务事实。
  */
 let focus = { id: null, seq: 0 }
+
+/**
+ * 作用域内的运行中任务数。
+ *
+ * 清理回执里的「仍有 N 个在跑」必须按作用域算：面板只清本会话，却报一个跨会话的
+ * 总数，用户会以为清理没生效。scope 为空 = 全量（应用入口的清空全部）。
+ */
+function runningCount(scope) {
+  return rt.state.tasks.filter((t) => t.status === 'running' && (!scope || sameSession(t.sessionFile, scope)))
+    .length
+}
 
 export const methods = {
   async listTasks() {
@@ -137,14 +149,19 @@ export const methods = {
   },
 
   async clearTasks(
-    /** @type {{ status?: string | string[], ids?: string | string[], keepRunning?: boolean }} */
-    { status, ids, keepRunning } = {},
+    /** @type {{ status?: string | string[], ids?: string | string[], keepRunning?: boolean, sessionFile?: string }} */
+    { status, ids, keepRunning, sessionFile } = {},
   ) {
     const keep = keepRunning !== false
+    // 作用域：工具与右栏面板都传当前会话；应用入口（全量视图）不传 = 清全部。
+    // 「不传 = 全部」是有意的——入口本来就是给用户看全量、清全量的地方，
+    // 而工具与面板不该顺手把别的会话记录一起带走。
+    const scope = String(sessionFile || '')
     const wanted = Array.isArray(status) ? status.map(String) : status ? [String(status)] : []
     const wantedIds = Array.isArray(ids) ? ids.map(String) : ids ? [String(ids)] : []
     let skippedRunning = 0
     const victims = rt.state.tasks.filter((t) => {
+      if (scope && !sameSession(t.sessionFile, scope)) return false
       // 「本来会被选中」先算一遍，再让 keepRunning 决定跳不跳：分开写的话，
       // 不传 status 时运行中任务不满足 wanted.includes，跳过了却不计数，
       // 回执会说「没有已结束的任务可清理」——而实际是两个任务在跑
@@ -165,7 +182,7 @@ export const methods = {
         ok: true,
         cleared: 0,
         ids: [],
-        running: rt.state.tasks.filter((t) => t.status === 'running').length,
+        running: runningCount(scope),
         missing: wantedIds,
       }
     }
@@ -202,7 +219,7 @@ export const methods = {
     const missing = wantedIds.filter(
       (id) => !clearedIds.includes(id) && !rt.state.tasks.some((t) => t.id === id),
     )
-    const remaining = rt.state.tasks.filter((t) => t.status === 'running').length
+    const remaining = runningCount(scope)
     return {
       ok: true,
       cleared: clearedIds.length,

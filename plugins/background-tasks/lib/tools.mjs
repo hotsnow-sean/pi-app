@@ -19,7 +19,7 @@ import { join as joinPath } from 'node:path'
 const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : ''
 const imp = (name) => import(pathToFileURL(joinPath(import.meta.dirname, `${name}.mjs`)).href + Q)
 const { rt, SETTING_DEFAULTS } = await imp('runtime')
-const { statusText, stopReasonText, fmtDuration, fmtBytes, jsonBlock } = await imp('format')
+const { statusText, stopReasonText, fmtDuration, fmtBytes, jsonBlock, sameSession } = await imp('format')
 const {
   logPathFor,
   readLog,
@@ -34,6 +34,33 @@ const { taskById, save } = await imp('store')
 const { suppressReport } = await imp('report')
 const { startTask, stopTask, waitForTerminal } = await imp('tasks')
 const { methods } = await imp('methods')
+
+/**
+ * 工具只作用于**本会话发起**的任务。
+ *
+ * 任务是全局进程，但「谁在跟这个任务对话」是按会话分的：模型在会话 A 里看到会话 B
+ * 的任务，既分不出归属，也能一个 bg_stop 停掉别人的长任务。跨会话的查看与清理
+ * 走应用入口（views.main）——那边是用户亲眼看着、亲手点的。
+ */
+function sessionScope(meta) {
+  return String(meta?.sessionFile || '')
+}
+
+function inScope(task, meta) {
+  return sameSession(task.sessionFile, sessionScope(meta))
+}
+
+/** 取任务并确认归属：不属于本会话时给一句能自我解释的错误，而不是含糊的 unknown */
+function taskInScope(id, meta) {
+  const task = taskById(String(id || ''))
+  if (!task) throw new Error(`unknown task: ${id}`)
+  if (!inScope(task, meta)) {
+    throw new Error(
+      `${task.id} 不属于当前会话。bg_* 工具只作用于本会话发起的任务；跨会话的任务请在「后台任务」应用入口查看和处理。`,
+    )
+  }
+  return task
+}
 
 /** 让模型在启动时就知道「这个任务会不会自己回来」——规则不透明比不回报更糟 */
 export function reportOutlook(task) {
@@ -140,15 +167,15 @@ export const tools = {
   },
 
   async bg_rerun(args, meta) {
-    const source = taskById(String(args.id || ''))
-    if (!source) throw new Error(`unknown task: ${args.id}`)
+    const source = taskInScope(args.id, meta)
     if (source.status === 'running') throw new Error(`${source.id} 还在运行，先停止再重跑`)
     const task = startTask({
       command: source.command,
       label: source.label,
       cwd: source.cwd,
-      // 重跑通常发生在同一个会话里；换会话重跑时用调用方给的那个
-      sessionFile: meta.sessionFile || source.sessionFile,
+      // 归属用调用方的写法（worker 给的绝对路径）：source 可能记的是相对路径，
+      // 两者 sameSession 相等，但落盘统一成绝对值更省事
+      sessionFile: sessionScope(meta),
       shell: source.shell,
       timeoutSeconds: source.timeoutMs ? source.timeoutMs / 1000 : undefined,
     })
@@ -161,10 +188,11 @@ export const tools = {
     }
   },
 
-  async bg_clear(args) {
+  async bg_clear(args, meta) {
     // 逻辑收敛到 methods.clearTasks（工具层与 invoke 层曾经各写一份过滤，
     // ids 维度就是只在一份里生效才暴露的）。这里只负责把结果格式化成给模型看的文案。
-    const res = await methods.clearTasks(args)
+    // 作用域同其它工具：只清本会话。跨会话清理在应用入口，那边清的是用户眼前的全量列表。
+    const res = await methods.clearTasks({ ...args, sessionFile: sessionScope(meta) })
     const wanted = Array.isArray(args.status) ? args.status.map(String) : args.status ? [String(args.status)] : []
     // 「没有 running 任务」与事实不符是排障陷阱：明明在跑却说没有，
     // 实情是 keepRunning=true 把它们跳过了。文案必须说实话。
@@ -185,7 +213,7 @@ export const tools = {
         details: res,
       }
     }
-    const remaining = rt.state.tasks.filter((t) => t.status === 'running').length
+    const remaining = rt.state.tasks.filter((t) => t.status === 'running' && inScope(t, meta)).length
     return {
       text: `已清理 ${res.cleared} 条任务记录（${res.ids.join(', ')}）。${
         res.missing?.length ? `id 不存在已跳过：${res.missing.join(', ')}。` : ''
@@ -199,9 +227,8 @@ export const tools = {
     }
   },
 
-  async bg_output(args) {
-    const task = taskById(String(args.id || ''))
-    if (!task) throw new Error(`unknown task: ${args.id}`)
+  async bg_output(args, meta) {
+    const task = taskInScope(args.id, meta)
     const stream = args.stream === 'err' ? 'err' : 'out'
     const file = logPathFor(task, stream)
     if (!file) throw new Error(`${task.id} 没有 stderr 记录（旧版本任务只保存合并输出）`)
@@ -264,9 +291,8 @@ export const tools = {
     return { text: lines.join('\n'), details }
   },
 
-  async bg_stop(args) {
-    const task = taskById(String(args.id || ''))
-    if (!task) throw new Error(`unknown task: ${args.id}`)
+  async bg_stop(args, meta) {
+    const task = taskInScope(args.id, meta)
     const stopped = stopTask(task, args.force === true)
     // 不传 waitMs 也给 1s：停止是短操作，回执顺手带上终态，省一次 bg_list 往返。
     // 显式传 0 表示「发完就返回」，那是调用方明确要的语义
@@ -297,10 +323,13 @@ export const tools = {
     return { text, details }
   },
 
-  async bg_list(args) {
+  async bg_list(args, meta) {
     const want = args.status ? String(args.status) : ''
     const now = Date.now()
-    const tasks = rt.state.tasks
+    // 只列本会话：任务是全局进程，但「哪些跟我这轮工作有关」按会话分。
+    // 跨会话的看全量在应用入口（views.main），那里也提供操作按钮。
+    const mine = rt.state.tasks.filter((t) => inScope(t, meta))
+    const tasks = mine
       .filter((t) => !want || t.status === want)
       .sort((a, b) => b.startedAt - a.startedAt)
       .map((t) => ({
@@ -324,15 +353,23 @@ export const tools = {
     const details = {
       tasks,
       running,
+      scope: 'session',
       reportPolicy: policy,
       thresholdMs: Number(rt.settings.reportThresholdMs) || SETTING_DEFAULTS.reportThresholdMs,
     }
     if (args.format === 'json') return { text: jsonBlock(details), details }
-    const text = tasks.length
-      ? [`${tasks.length} 个任务（${running} 个运行中，回报策略 ${policy}，新→旧）：`]
-          .concat(tasks.map((t) => `${t.id} · ${statusText(t)} · ${fmtDuration(t.durationMs)} · ${t.label}`))
-          .join('\n')
-      : '没有符合条件的后台任务。'
+    if (tasks.length === 0) {
+      const other = rt.state.tasks.length - mine.length
+      const text = want
+        ? `本会话没有状态为 ${want} 的后台任务。`
+        : other > 0
+          ? `本会话没有后台任务。其它会话还有 ${other} 条——bg_* 只作用于本会话，跨会话的任务请在「后台任务」应用入口查看。`
+          : '本会话还没有后台任务。'
+      return { text, details }
+    }
+    const text = [`${tasks.length} 个任务（${running} 个运行中，回报策略 ${policy}，新→旧）：`]
+      .concat(tasks.map((t) => `${t.id} · ${statusText(t)} · ${fmtDuration(t.durationMs)} · ${t.label}`))
+      .join('\n')
     return { text, details }
   },
 }

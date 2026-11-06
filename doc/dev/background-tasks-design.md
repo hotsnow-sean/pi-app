@@ -1264,3 +1264,67 @@ pidfile 是任务副产物，必须进同一条清理链：`removeTaskFiles` 一
 用户只看到 8 个。改为超限直接 `isError` 并说明怎么改（合并/分多次调用），
 `questions` 与 `options` 的 `maxItems: 8` 同时写进 `plugin.json`，让模型从 schema
 就知道上限。invoke 分发的 `methods[method]` 一并补 `Object.hasOwn` 防原型链。
+
+## 28. 会话作用域收缩（v0.7.1）
+
+### 28.1 问题：工具层没有作用域
+
+任务表是**全局一份**（`rt.state.tasks`，见 `lib/store.mjs`），`sessionFile` 只是记录上的
+一个归属字段。前几轮只在三个展示口做了过滤，工具层一直没管：
+
+- `bg_list` 直接遍历全表，`details.tasks` 里**没有 `sessionFile`**——模型看得到别会话的
+  任务，却分不出归属；
+- `bg_stop` / `bg_output` / `bg_rerun` 按 id 全局查找，一个 id 就能操作别的会话的任务；
+- `bg_clear` 不带 ids 时清的是全表——在会话 A 里能把会话 B 的记录连日志一起删掉。
+
+多开两个会话就成立，fork 只是把它放大：fork 生成新的 sessionFile（`handleFork` →
+`runtimeFork`），托盘与面板按 `sameSession` 过滤后，新会话看不到原会话的任务（这是对的），
+而工具层却能看见、还能停——两边对「归属」的理解不一致。
+
+### 28.2 决定：入口全量，其余按会话
+
+| 落点 | 作用域 |
+| --- | --- |
+| 应用入口（`views.main` 中央视图，`placement === 'center'`） | **全部会话**：跨会话管理只在这里做 |
+| 右栏面板（`placement === 'panel'`） | 当前会话 |
+| 托盘（`ctx.ui.setComposerBar`） | 本来就是 per-session 存（`session-scope.ts`） |
+| 工具（`bg_start` 之外的 `bg_*`） | 当前会话（`meta.sessionFile`） |
+
+**为什么不是「让任务跟随 fork」**：任务不是会话内容，它是一条真实进程 + 一个投递地址。
+todo 那种「状态存在 session 树里、切分支自动重建」的语义照搬不过来——进程没有分支。
+fork 之后，原会话的任务只属于原会话，这是正确行为；要修的不是跟随，而是**可见性与越权**。
+
+### 28.3 实现
+
+- `lib/tools.mjs` 加 `sessionScope(meta)` / `inScope(task, meta)` / `taskInScope(id, meta)`：
+  统一用 `format.sameSession` 判归属（与托盘、面板同一份规则，`plugin-typing` 与
+  `app.test.mjs` 两头守着）。跨会话时给一句能自我解释的错误，而不是含糊的 `unknown task`。
+- `bg_list` 先按会话过滤，`details.scope = 'session'`；本会话为空但别处有任务时，
+  文案说明「其它会话还有 N 条，跨会话请在应用入口查看」——让模型知道边界，而不是以为没任务。
+- `bg_clear` 把 `sessionFile` 传给 `methods.clearTasks`。
+- `methods.clearTasks` 增加 `sessionFile`：**不传 = 全量**（应用入口的「清空全部已结束」），
+  传了就只清该会话。`running` 计数改 `runningCount(scope)`——面板只清本会话却报一个
+  跨会话的在跑数，会被读成「清理没生效」。
+- 宿主给 `plugin-context` 补 `placement`（`center | panel | sessionBar`），`PluginPanelFrame`
+  的 prop 透传。UI 的 `visibleTasks()` 据此分支：`center` 返回全部，其余按会话过滤。
+  缺省 `panel`（收缩的那一侧），宿主漏传不会把别人的任务摆出来。
+- 应用入口的行尾标一行来源会话（`sessionLabel`，文件名去扩展名）——跨会话视图不标归属，
+  用户分不清哪条是哪条。
+
+### 28.4 边界
+
+- **无 `sessionFile` 的历史任务在工具里不可见**（`sameSession` 两侧都非空才成立）。
+  它们只会在应用入口出现，也只在入口能清理——这是有意的：归属未知的任务不该被
+  某个会话的工具顺手处理。
+- `removeTask` / `rerunTask` / `stopTask` 这些 **invoke 方法不做作用域校验**：调用方是
+  面板，面板显示什么就点得到什么；入口本来就要能操作全部。
+- 回报投递仍固定投向发起会话（`report.mjs`），本轮没动：任务是在那里发起的，改投 fork
+  出来的新会话反而错。代价是 fork 后父会话可能被回报唤醒一轮，属于已知行为。
+
+### 28.5 测试
+
+`main.test.mjs` 新增 `session scope` 3 条：`bg_list` 双向隔离 + 空会话提示 + 入口全量、
+`bg_stop`/`bg_output`/`bg_rerun` 越权拒绝且进程不受影响、`bg_clear` 只清本会话且
+「运行中计数」按作用域算、入口 `clearTasks`（不传 sessionFile）能清全部。
+`ui/app.test.mjs` 新增 1 条：`center` 展示两条跨会话任务、行内标出来源、清理按钮是
+「清空全部已结束」语义。

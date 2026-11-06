@@ -67,8 +67,18 @@ async function start(args, meta = {}) {
   })
 }
 
-async function waitDone(id, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs
+/** 任意 bg_* 工具调用：默认落在 s1.jsonl，与 start 的默认会话一致 */
+async function tool(name, args, meta = {}) {
+  return handle.invoke('tool.execute', {
+    name,
+    args,
+    sessionFile: 's1.jsonl',
+    cwd: process.cwd(),
+    ...meta,
+  })
+}
+
+async function waitDone(id, timeoutMs = 30_000) {  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const res = await handle.invoke('listTasks', {})
     const task = res.tasks.find((t) => t.id === id)
@@ -1010,5 +1020,81 @@ describe("storage safety (review re-run)", () => {
     // 对照组照旧：表可用时 clear 后的扫尾正常收孤儿
     handle = await activate(fakeCtx({ seq: 9, tasks: [] }))
     expect(fs.readdirSync(logsDir).filter((n) => /^bg-\d+\.log$/.test(n))).toEqual([])
+  }, 30_000)
+})
+
+/**
+ * 会话作用域（v0.7.1）。
+ *
+ * 任务是全局进程，但工具只该碰本会话发起的：模型在会话 A 里看到一个别的会话的任务，
+ * 既分不出归属，也能一个 bg_stop 停掉别人的长任务。跨会话的查看与清理留给应用入口
+ * （views.main，也就是不传 sessionFile 的 clearTasks 与全量的 listTasks）。
+ */
+describe('session scope', () => {
+  it('bg_list 只列本会话，空会话会提示还有别的会话的任务', async () => {
+    const a = await start({ command: 'echo a', label: 'a' }, { sessionFile: 's1.jsonl' })
+    const b = await start({ command: 'echo b', label: 'b' }, { sessionFile: 's2.jsonl' })
+
+    const mine = await tool('bg_list', {}, { sessionFile: 's1.jsonl' })
+    const ids = mine.details.tasks.map((t) => t.id)
+    expect(ids).toContain(a.details.id)
+    expect(ids).not.toContain(b.details.id)
+    expect(mine.details.scope).toBe('session')
+
+    // 反过来也是：s2 只看得到 s2 的
+    const theirs = await tool('bg_list', {}, { sessionFile: 's2.jsonl' })
+    expect(theirs.details.tasks.map((t) => t.id)).toEqual([b.details.id])
+
+    // 没有任务的会话要知道「不是没有任务，是本会话没有」
+    const empty = await tool('bg_list', {}, { sessionFile: 's9.jsonl' })
+    expect(empty.details.tasks).toEqual([])
+    expect(empty.text).toContain('其它会话还有 2 条')
+
+    // 应用入口（listTasks）是全量的：那里的 UI 自己决定怎么展示
+    const all = await handle.invoke('listTasks', {})
+    expect(all.tasks.map((t) => t.id)).toEqual(expect.arrayContaining([a.details.id, b.details.id]))
+  }, 30_000)
+
+  it('bg_stop / bg_output / bg_rerun 拒绝别的会话的任务', async () => {
+    const b = await start({ command: 'sleep 4', label: 's2 长任务' }, { sessionFile: 's2.jsonl' })
+    // sleep 4 > describeStart 的 120ms 观察窗，回执必然还是 running
+    expect(b.details.status).toBe('running')
+
+    for (const [name, args] of [
+      ['bg_stop', { id: b.details.id, waitMs: 0 }],
+      ['bg_output', { id: b.details.id }],
+      ['bg_rerun', { id: b.details.id }],
+    ]) {
+      const res = await tool(name, args, { sessionFile: 's1.jsonl' })
+      expect(res.isError, name).toBe(true)
+      expect(res.text, name).toContain('不属于当前会话')
+    }
+
+    // 本会话的工具没有把它停掉：进程还活着
+    const still = (await handle.invoke('listTasks', {})).tasks.find((t) => t.id === b.details.id)
+    expect(still.status).toBe('running')
+
+    // 收尾：入口 scope 清全部（含运行中的）
+    await handle.invoke('clearTasks', { keepRunning: false })
+  }, 30_000)
+
+  it('bg_clear 只清本会话；应用入口不传 sessionFile 才能清全部', async () => {
+    const a = await start({ command: 'echo a', label: 'a' }, { sessionFile: 's1.jsonl' })
+    const b = await start({ command: 'echo b', label: 'b' }, { sessionFile: 's2.jsonl' })
+    await waitDone(a.details.id)
+    await waitDone(b.details.id)
+
+    const cleared = await tool('bg_clear', {}, { sessionFile: 's1.jsonl' })
+    expect(cleared.details.cleared).toBe(1)
+    expect(cleared.details.ids).toEqual([a.details.id])
+    // 「仍有 N 个在跑」也得按作用域算，否则本会话清空了却报一个跨会话的数字
+    expect(cleared.details.running).toBe(0)
+
+    const left = (await handle.invoke('listTasks', {})).tasks.map((t) => t.id)
+    expect(left).toEqual([b.details.id])
+
+    const all = await handle.invoke('clearTasks', {})
+    expect(all.cleared).toBe(1)
+    expect((await handle.invoke('listTasks', {})).tasks).toEqual([])
   }, 30_000)
 })

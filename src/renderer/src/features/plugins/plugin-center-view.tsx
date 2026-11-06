@@ -65,6 +65,7 @@ export function PluginCenterView({ pluginId, viewId }: { pluginId: string; viewI
         <PluginPanelFrame
           pluginId={pluginId}
           panelId={pluginViewGlobalId(pluginId, viewId)}
+          placement="center"
           title={view.title}
           entry={view.entry}
         />
