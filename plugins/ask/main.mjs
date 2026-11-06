@@ -49,10 +49,35 @@ function save() {
 
 // ---------- 工具入参规整 ----------
 
+/**
+ * 先查「会改变语义的形状问题」。
+ *
+ * 这里刻意不做截断：模型传 9 个选项、问卷只渲染 8 个，模型会以为问全了——
+ * 这类「假成功」比报错危险得多（报告 §3.2）。超限就拒绝，并告诉它怎么改。
+ */
+function validateShape(raw) {
+  if (!Array.isArray(raw)) return 'questions 必须是数组'
+  if (raw.length === 0) return 'questions 不能为空'
+  if (raw.length > MAX_QUESTIONS) {
+    return `questions 最多 ${MAX_QUESTIONS} 个，你传了 ${raw.length} 个：把相近的问题合并，或分多次调用 ask_user。`
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i]
+    const no = i + 1
+    if (!item || typeof item !== 'object') return `第 ${no} 题不是对象`
+    const options = Array.isArray(item.options) ? item.options : []
+    if (options.length > MAX_OPTIONS) {
+      return `第 ${no} 题有 ${options.length} 个选项，最多 ${MAX_OPTIONS} 个：合并相近选项，或把长尾项留给用户自己输入。`
+    }
+  }
+  return null
+}
+
 /** 模型给的参数不一定干净：只留下宿主问卷能安全渲染的部分 */
 function normalizeQuestions(raw) {
   if (!Array.isArray(raw)) return []
   const out = []
+  // 数量超限在 validateShape 就拒了；这里的 slice 只是兜底，不能靠它假装成功
   for (const item of raw.slice(0, MAX_QUESTIONS)) {
     if (!item || typeof item !== 'object') continue
     const question = String(item.question ?? '').trim()
@@ -120,6 +145,8 @@ function remember(questions, result, at) {
 // ---------- 工具执行 ----------
 
 async function runAskTool(args, signal) {
+  const shapeError = validateShape(args?.questions)
+  if (shapeError) return { text: `ask_user 参数有问题：${shapeError}`, isError: true }
   const questions = normalizeQuestions(args?.questions)
   if (questions.length === 0) {
     return {
@@ -160,7 +187,8 @@ export async function activate(pluginContext) {
   ctx.log(`ask active, ${state.records.length} record(s)`)
   return {
     async invoke(method, params) {
-      const fn = methods[method]
+      // hasOwn 防原型链：'constructor'/'toString' 这类名字不该被当成可用方法
+      const fn = Object.hasOwn(methods, method) ? methods[method] : null
       if (!fn) throw new Error(`unknown method: ${method}`)
       return fn(params ?? {})
     },

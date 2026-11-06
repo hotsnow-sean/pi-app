@@ -433,3 +433,24 @@ semver 部分区语义表逐项实测通过、§26.4 行数 13 个数字全对�
 - semver prerelease 标识符整串字符串比较、`pluginDirVersion` 不跟 symlink、两处手写
   `sdk-runtime-changed` 广播、UI `api()` 无超时、`cachedBash` 负缓存不 dispose、
   `pendingDeletes` 重试预算全局——与批次 6 相同，维持待办。
+
+---
+
+## 批次 8：v0.7.0 实测报告（多插件联测，2026-11-06 傍晚）
+
+报告见桌面《后台任务工具测试与改进建议》。本轮 P1 在本机做了最小复现，根因不是写法问题。
+
+| 级别 | 报告项 | 处置 |
+|---|---|---|
+| P1 | §1.1 `bg_stop` 报「已停止」但后代进程还活着、日志被锁删不掉 | 根因：Git Bash 的 MSYS fork 把子进程的 Windows 父 PID 指向已退出的 fork helper，父子链断裂 → `taskkill /T` 只能杀到 bash 层。改为启动时 `echo $$ > <id>.pid`、停止时 `kill -9 -<pgid>` 组杀 + taskkill 收 launcher；POSIX 改 detached 让子进程当组长；`waitForTerminal` 在终态后继续确认进程组消失（最多 1.5s，未死补 KILL）。见设计文档 §27 |
+| P3 | §3.3 `bg_clear` 报「已清理」但日志还在 | `removeTaskFiles` 返回删不掉的文件数，`clearTasks` 聚合，回执追加「N 个日志文件仍被进程占用，已安排自动重试」 |
+| P3 | §3.2 `ask_user` 第 9 个选项被静默截断 | 改为超限 `isError` + 说明怎么改；`plugin.json` 补 `maxItems: 8`；invoke 分发补 `Object.hasOwn`。新增 `plugins/ask/main.test.mjs` 4 条 |
+| P3 | §3.1 面板/托盘偶发不刷新 | 未复现，未改。若再现请附当时的 `listTasks` 输出与插件日志 |
+| 功能 | §5 scheduler 只有数据层、没有工具入口 | **不是 bug**，是新功能。待产品形态定清（到点执行的结果落到哪个会话）再单开一轮 |
+
+### 遗留（本轮新增）
+
+- pidfile 是新增的任务副产物，已进 `removeTaskFiles` 与扫尾正则；但**老的 `bg-N.pid`
+  若在早前版本残留不会被识别**——不存在这种数据（本版才引入）。
+- POSIX 的 detached 路径本机（Windows）无法实测，靠 `kill(-pid, 0)` 的标准语义与代码审查；
+  首次在 macOS/Linux 上跑请重点看「停止后进程组是否消失」。

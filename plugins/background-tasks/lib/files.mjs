@@ -21,8 +21,8 @@ const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : 
 const imp = (name) => import(pathToFileURL(joinPath(import.meta.dirname, `${name}.mjs`)).href + Q)
 const { rt } = await imp('runtime')
 
-/** 日志/脚本目录里的文件名：bg-<数字>.log|err|ps1 */
-const TASK_FILE_RE = /^(bg-\d+)\.(log|err|ps1)$/
+/** 日志/脚本目录里的文件名：bg-<数字>.log|err|ps1|pid */
+const TASK_FILE_RE = /^(bg-\d+)\.(log|err|ps1|pid)$/
 /** 删不掉的文件（句柄未释放）：扫尾时重试 */
 const pendingDeletes = new Set()
 const SWEEP_RETRY_MS = 1_200
@@ -43,16 +43,22 @@ export function tryRemoveFile(file) {
   }
 }
 
-/** 一条任务的两个输出文件（及 powershell 脚本），删记录时一起收掉，别留孤儿 */
+/**
+ * 一条任务的全部副产物（两个输出文件、powershell 脚本、msys pidfile）一起收掉。
+ * 返回删不掉的**文件个数**：调用方据此给用户/模型一句实话——「记录清了但文件还被
+ * 占用」与「全清干净了」不能报成同一句（报告 §3.3）。
+ */
 export function removeTaskFiles(task) {
   const files = [task.logPath, task.errPath]
   if (task.id && rt.scriptDir) files.push(path.join(rt.scriptDir, `${task.id}.ps1`))
-  let failed = false
+  if (task.id && rt.logDir) files.push(path.join(rt.logDir, `${task.id}.pid`))
+  let failed = 0
   for (const file of files) {
-    if (!tryRemoveFile(file)) failed = true
+    if (!tryRemoveFile(file)) failed += 1
   }
   // 删不掉的别默不作声：稍后再扫一遍，句柄释放后就收走了
-  if (failed) scheduleSweep()
+  if (failed > 0) scheduleSweep()
+  return failed
 }
 
 /**

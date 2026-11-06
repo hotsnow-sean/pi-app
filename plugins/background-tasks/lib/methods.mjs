@@ -178,7 +178,10 @@ export const methods = {
     await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
     rt.state.tasks = rt.state.tasks.filter((t) => !clearedIds.includes(t.id))
     save()
-    for (const task of victims) removeTaskFiles(task)
+    // 文件删不掉的条数要如实上报：记录删了但日志还被进程占用时，
+    // 「已清理 N 条」会让人以为磁盘也干净了（报告 §3.3）
+    let stuckFiles = 0
+    for (const task of victims) stuckFiles += removeTaskFiles(task)
     // 记录删完后再扫一遍目录：句柄已释放的残留（v8 报告 §八.2 的「惰性删除」）
     // 与任何历史孤儿都会在这里被收走，不必等用户再点一次清理。
     // 安全性由 sweepOrphanFiles 本体把关（rt.storageUsable）——读失败且没有任何
@@ -200,6 +203,7 @@ export const methods = {
       cleared: clearedIds.length,
       ids: clearedIds,
       running: remaining,
+      ...(stuckFiles > 0 ? { stuckFiles } : {}),
       ...(skippedRunning > 0 ? { skippedRunning } : {}),
       ...(missing.length ? { missing } : {}),
     }

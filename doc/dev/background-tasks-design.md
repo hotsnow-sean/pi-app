@@ -1192,3 +1192,73 @@ log-io 141 / shell 163 / methods 234 / report 252 / tasks 357 / tools 333。
 原生 ESM 缓存按 URL 全进程共享：同一测试进程跑多个 import main.mjs 的测试文件时
 lib 是同一实例，隔离靠 activate()/deactivate() 重建状态——不要绕过这两个入口直接
 import lib（已写进 main.mjs 头注释）。
+
+## 27. v0.7.0 实测报告：`bg_stop` 杀不掉后代（§1.1）
+
+### 27.1 现象
+
+`bg_start({ command: 'sleep 300' })` → `bg_stop`（force）返回「已停止」，
+但 `ps -W` 里 `sleep` 还活着；日志文件被锁、删不掉，`bg_clear` 报「已清理 N 条」
+而磁盘上仍留着 bg-N.log。
+
+### 27.2 根因：Windows 侧的父子链在 MSYS 上是断的
+
+代码里本来就有 `taskkill /PID <pid> /T /F`，问题不在写法。实测两条命令对同一棵树的输出：
+
+```
+ps -W:  bash(msys 1034) → sleep(msys 1036, WINPID 22372)
+CIM:    sleep.exe 22372 ← 父进程 23792（早已退出，不在树里）
+```
+
+Git Bash 的 MSYS fork 会先起一个 fork helper，子进程复制它的 Windows 父 PID，
+helper 随即退出。于是 `sleep.exe` 的 Windows 父链指向一个不存在的进程——
+**Windows 侧任何「按父子链杀树」的办法（taskkill /T、递归查 CIM）都只能杀到 bash 层**，
+最内层命令永远漏网。这不是 Windows 的 bug，是 MSYS 的实现方式决定的。
+
+顺带说明为什么不能靠「杀 PID 后等它自己退」：bash 退出了，`sleep` 已被 init 收养，
+它不属于任何 Windows 作业对象，宿主这边没有任何句柄能碰到它。
+
+### 27.3 修法：走 MSYS 自己的进程组
+
+MSYS 维护自己的进程组，且 `$$` 就是组 id（实测 PGID == PID）。
+
+1. **启动**：bash 分支的命令前加 `echo $$ > <logs>/<id>.pid`（用 `;` 连接，
+   pidfile 写不成不该拖累任务）。见 `lib/shell.mjs` 的 `buildSpawnSpec`。
+2. **停止**：先 `bash -c "kill -9 -<pgid>"` 整组收（实测 100ms 内 `sleep` 消失），
+   再 `taskkill /PID <winpid> /T /F` 收 launcher 本身与原生子树。两者都要发：
+   组杀管后代，taskkill 管 launcher。见 `lib/tasks.mjs` 的 `signalTree`。
+3. **cmd / powershell 分支不变**：原生 Windows 进程树的父链是完整的，`taskkill /T` 有效。
+   只有 MSYS 树需要组杀。
+4. **POSIX 反向要求 detached**：非 detached 的子进程留在宿主的进程组里（pid ≠ pgid），
+   `kill(-pid)` 根本指不到它。改 `detached: true` 让子进程当组长，负 pid 才真的收整组。
+   Windows 上仍然刻意不 detached——Electron 主进程里 detached 子进程会「起了但从不退出」。
+5. **等真的停干净再回执**：`waitForTerminal` 在 launcher 退出后继续探测进程组
+   （Windows 用 `kill -0 -pgid`，POSIX 用 `kill(-pid, 0)`），最多再等 1.5s；
+   还没死就补一刀 KILL。回执说「已停止」时，进程必须真的没了。
+6. **超时与日志超限共用 `stopTask`**：v8 报告里「超时后日志还被锁」是同一个根因，一起修掉。
+
+### 27.4 文件卫生
+
+pidfile 是任务副产物，必须进同一条清理链：`removeTaskFiles` 一起删，
+扫尾正则扩成 `bg-\d+\.(log|err|ps1|pid)`。重启接管来的旧记录没有 `pidFile` 字段，
+`readMsysPgid` 按命名约定再找一次，盘上还在就照样能整组收。
+
+### 27.5 清理回执要说实话（报告 §3.3）
+
+`removeTaskFiles` 返回删不掉的文件个数，`clearTasks` 聚合，`bg_clear` 文案追加
+「其中 N 个日志文件仍被进程占用，已安排自动重试」。进程树修好后这条路径很少触发，
+但「记录清了 ≠ 磁盘清了」不能报成同一句话。
+
+### 27.6 测试
+
+`plugins/background-tasks/main.test.mjs` 的 `process tree termination` 三条用例起真进程：
+①`sleep 120` + 手停 → 断言进程组消失；②超时路径 → 同样断言（共用 stopTask 的证据）；
+③`bg_clear` 后任务文件一个不剩、回执里没有「被占用」。断言用的是
+`kill -0 -<pgid>`：停止前必须为 true（证明探针有效），停止后必须为 false。
+
+### 27.7 顺带修：`ask_user` 选项静默截断（报告 §3.2）
+
+`plugins/ask/main.mjs` 的 `.slice(0, 8)` 会把第 9 个选项砍掉，模型以为问了 9 个、
+用户只看到 8 个。改为超限直接 `isError` 并说明怎么改（合并/分多次调用），
+`questions` 与 `options` 的 `maxItems: 8` 同时写进 `plugin.json`，让模型从 schema
+就知道上限。invoke 分发的 `methods[method]` 一并补 `Object.hasOwn` 防原型链。
