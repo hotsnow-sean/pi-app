@@ -842,3 +842,33 @@ ids 清理的 missing/skippedRunning 区分。fakeCtx 的 storage 支持复用�
 `src/main/plugins/__tests__/plugin-composer-bar.test.ts` 新增 5 条：推送入表、
 null 出表（仍广播）、同插件跨会话隔离、整表收回广播 null、空 sessionFile 忽略。
 stores + composer 回归 41 文件 237 条全过。
+
+### 19.4 追补：§19 首次没生效的两个原因
+
+零语实测：托盘仍然不出现；但「停用插件再启用」立刻就有。这个现象把问题锁死在
+**启动那一拉根本没成功**（停用/启用走的是推送，不经 IPC）。
+
+1. **preload 通道白名单**：`window.piDesktop.invoke` 只放行
+   `packages/shared/ipc-channels.ts` 里的通道，新加的 `ipc:plugins.composerBars.list`
+   不在其中 → preload 直接 `Promise.reject` → 当初的 `.catch(() => {})` 把它吞了，
+   表面看「什么都没发生」。**任何 renderer 发起的新 invoke 都必须同时加白名单**，
+   仓库已有契约测试 `scripts/tests/ipc-channel-sync.test.mjs` 专门守这条，
+   改完 IPC 记得跑 `npm run test:scripts`。
+2. **反向竞态**：即使通道通了，启动拉取也可能早于插件 `activate()`
+   （插件侧要 load 持久化 + recover 扫任务），这一刻 main 的状态表还是空的。
+   于是「拉取早于插件就绪」和「推送早于 renderer 订阅」两头都可能踩空。
+
+现在的兜底是三条一起上（`src/renderer/src/lib/plugin-composer-bar-sync.ts`）：
+
+- 启动拉一次；
+- 1.5s 后补拉一次（覆盖插件激活慢）；
+- **每次切换会话再拉一次**——这是最贴合用户实际动作的一条：点进目标会话时
+  插件早已就绪，从 main 状态表拉必然拿到。
+
+失败的调用不再静默：打了 `[plugin-bars] sync failed` 的 warn，下次类似问题在日志里能直接看见。
+
+### 19.5 连带修复
+
+- `scripts/tests/apply-app-event-budget.test.mjs` 与 `fmsm-prd-gates.test.mjs` 的
+  行数预算有 off-by-one：末尾换行被算成多一行，`apply-app-event.ts` 正好 120 行
+  却被判 121。两处都改成先去掉末尾换行再计数。

@@ -208,6 +208,7 @@ export const IPC_INVOKE_CHANNELS = [
   'ipc:plugins.settings.get',
   'ipc:plugins.settings.set',
   'ipc:plugins.settings.reset',
+  'ipc:plugins.composerBars.list',
   'ipc:plugin.invoke',
   'ipc:remote.status',
   'ipc:remote.setEnabled',

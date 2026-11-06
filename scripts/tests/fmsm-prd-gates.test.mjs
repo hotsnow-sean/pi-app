@@ -7,7 +7,8 @@ import { readdirSync } from 'node:fs'
 const root = process.cwd()
 
 function lineCount(rel) {
-  return readFileSync(join(root, rel), 'utf8').split('\n').length
+  // 末尾换行不算一行（否则正好卡在预算上的文件会被判超 1 行）
+  return readFileSync(join(root, rel), 'utf8').replace(/\r?\n$/, '').split('\n').length
 }
 
 function countAsAny(rel) {
