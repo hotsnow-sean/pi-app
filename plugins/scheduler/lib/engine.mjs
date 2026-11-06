@@ -27,6 +27,7 @@ const {
   parseToken,
   stripToken,
   decideNotify,
+  notifySkipReason,
   notifyStarted,
   notifyFinished,
   sendInbox,
@@ -178,24 +179,36 @@ async function execute(item, gen) {
     return
   }
 
-  const ok = !!result.ok
-  const rawText = ok ? String(result.text ?? '') : ''
+  const sessionOk = !!result.ok
+  const rawText = sessionOk ? String(result.text ?? '') : ''
   const fileSignal = readSignal(run.id)
   const token = parseToken(rawText)
+  // agent 自报失败（`SCHED:failed: 原因`）：会话跑完了，但任务目标没达成。
+  // 这与「会话异常」是两种失败，记录里都算 failed，区别是自报的还带正文。
+  const selfFailed = token?.kind === 'failed'
+  const ok = sessionOk && !selfFailed
   // 判定优先级：结果文件 > 输出协议 > 兜底（按有变化处理，宁可多打扰一次）
-  const changed = fileSignal ? fileSignal.changed : token === 'unchanged' ? false : true
+  const changed = fileSignal ? fileSignal.changed : token?.kind === 'unchanged' ? false : true
   const source = fileSignal ? 'file' : token ? 'protocol' : 'fallback'
   const output = stripToken(rawText)
   const summary = fileSignal?.summary || oneLine(output, 120)
   const decision = decideNotify(task, { ok, changed })
   const manual = item.trigger === 'manual'
+  const willSend = decision.send && !manual
 
   finishRun(run, {
     status: ok ? 'ok' : 'failed',
-    output: ok ? output : '',
-    error: ok ? '' : String(result.error || '未知错误'),
+    // 自报失败时正文就是诊断线索，必须留着；会话级异常（超时/崩）本来就没正文
+    output,
+    error: ok
+      ? ''
+      : selfFailed
+        ? token.reason || oneLine(output, 200) || '任务自报失败'
+        : String(result.error || '未知错误'),
     signal: { changed, source, summary },
-    notify: decision.send && !manual ? 'sent' : 'none',
+    notify: willSend ? 'sent' : 'none',
+    // 未通知也要记原因：否则「没有标注」会被读成「通知过了」
+    notifyWhy: willSend ? '' : notifySkipReason({ policy: decision.policy, ok, changed, manual }),
   })
 
   task.lastRunAt = run.startedAt

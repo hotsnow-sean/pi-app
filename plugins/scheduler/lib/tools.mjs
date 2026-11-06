@@ -312,7 +312,9 @@ const tools = {
       const dur = run.status === 'queued' || run.status === 'running' ? '进行中' : fmtDuration(run.durationMs)
       lines.push(`${index + 1}. ${run.taskName} · ${when} · ${statusText(run.status)} · ${dur}${flags ? ` · ${flags}` : ''}`)
       if (run.status === 'failed' && run.error) lines.push(`   错误：${oneLine(run.error, 200)}`)
-      else if (run.notify === 'none' && run.signal?.changed === false) lines.push('   无变化（按通知策略未提示）')
+      // 「为什么没通知」由引擎记原因码、format 出文案；不再用「有没有标注」当判据
+      const notifyNote = publicRun(run).notifyLabel
+      if (notifyNote) lines.push(`   ${notifyNote}`)
       if (withOutput && run.output) lines.push(indent(run.output.slice(0, 4_000)))
     })
     return {

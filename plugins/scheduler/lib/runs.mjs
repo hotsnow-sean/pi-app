@@ -19,7 +19,7 @@ const imp = (name) => import(pathToFileURL(path.join(import.meta.dirname, `${nam
 
 const { rt, log, MAX_RUNS, OUTPUT_LIMIT, PREVIEW_CHARS } = await imp('runtime')
 const { appendRun, appendDelete, runsSorted } = await imp('store')
-const { oneLine } = await imp('format')
+const { oneLine, notifyLabel } = await imp('format')
 
 function randomSuffix() {
   return Math.random().toString(36).slice(2, 8)
@@ -48,6 +48,7 @@ export function newRun(task, trigger) {
     error: '',
     skipReason: '',
     notify: 'none',
+    notifyWhy: '',
     signal: null,
     seen: false,
     v: 1,
@@ -89,6 +90,7 @@ export function skipRun(task, trigger, reason) {
     error: '',
     skipReason: reason,
     notify: 'none',
+    notifyWhy: '',
     signal: null,
     seen: false,
     v: 1,
@@ -101,7 +103,7 @@ export function skipRun(task, trigger, reason) {
 /**
  * 收尾：唯一写终态的地方。
  * @param {any} run
- * @param {{ status: 'ok' | 'failed', output?: string, error?: string, signal?: any, notify?: string }} patch
+ * @param {{ status: 'ok' | 'failed', output?: string, error?: string, signal?: any, notify?: string, notifyWhy?: string }} patch
  */
 export function finishRun(run, patch) {
   const finishedAt = Date.now()
@@ -112,6 +114,7 @@ export function finishRun(run, patch) {
   run.error = String(patch.error ?? '')
   run.signal = patch.signal ?? null
   run.notify = patch.notify ?? 'none'
+  run.notifyWhy = patch.notifyWhy ?? ''
   run.seen = false
   appendRun(run)
   return run
@@ -270,6 +273,10 @@ export function publicRun(run) {
     error: run.error,
     skipReason: run.skipReason,
     notify: run.notify,
+    // notifyWhy 是原因码（never / failures-ok / unchanged / manual），notifyLabel 是给
+    // 人看的那句话——UI 与工具都读 label，「有无标注」不再需要调用方自己猜
+    notifyWhy: run.notifyWhy ?? '',
+    notifyLabel: notifyLabel(run),
     signal: run.signal,
     seen: run.seen,
     outputPreview: oneLine(run.output, PREVIEW_CHARS),

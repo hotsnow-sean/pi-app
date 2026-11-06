@@ -1,7 +1,7 @@
 {
   "id": "scheduler",
   "name": "定时任务",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月 / 间隔，支持有效期、启停、立即运行、条件通知（顶栏信箱 + 系统通知）与运行历史。",
   "icon": "Clock",
   "main": "main.mjs",
@@ -217,7 +217,7 @@
     {
       "name": "sched_runs",
       "label": "查询运行记录",
-      "description": "Read past runs of scheduled tasks: status, duration, trigger (scheduled/missed/manual), and optionally the result text. Use it when the user asks 'did it run', 'how did last night's run go', or 'what did it say'. By default it returns summaries only; pass withOutput:true when the user asks what the run actually produced.",
+      "description": "Read past runs of scheduled tasks: status, duration, trigger (scheduled/missed/manual), and optionally the result text. Use it when the user asks 'did it run', 'how did last night's run go', or 'what did it say'. By default it returns summaries only; pass withOutput:true when the user asks what the run actually produced. A run that finished but notified nobody says why (no change / policy never / policy failures), so do not guess from the absence of a notification.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -258,7 +258,7 @@
       "key": "notifyPolicy",
       "type": "select",
       "label": "默认通知策略",
-      "description": "任务没单独设置时用它。「有变化才通知」适合监控类任务；提醒类任务建议在任务里改成「每次都通知」。",
+      "description": "任务没单独设置时用它。「有变化才通知」适合监控类任务；提醒类任务建议在任务里改成「每次都通知」。「失败」包括会话异常/超时，以及 agent 判断任务没做成（例如要跑的命令退出码非 0）后自报的失败。",
       "default": "on-change",
       "options": [
         {
