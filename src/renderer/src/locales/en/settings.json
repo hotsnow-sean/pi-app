@@ -1205,6 +1205,8 @@
     "sourceUser": "Installed",
     "disabledBadge": "Disabled",
     "invalidBadge": "Invalid manifest",
+    "enginesBadge": "Version not satisfied",
+    "enginesReason": "Host version does not satisfy the engines declaration",
     "invalidManifest": "Manifest validation failed",
     "settingsCount": "{{count}} settings",
     "toggleFailed": "Toggle failed: {{error}}",

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 
 /**
  * 插件契约的「可执行性」检查。
@@ -114,6 +114,8 @@ describe('插件类型契约', () => {
     // 静态 import 解析相对路径时会丢掉 ?v=：入口被 bust 重新执行，它引到的插件内
     // 文件却命中缓存——新旧两代模块同进程并存，是比完全旧更难查的错。所以插件内
     // 模块引用一律走带 ?v= 的动态导入（见 background-tasks/main.mjs 顶部注释）。
+    // 按 `from '<相对路径>'` 扫而不是按行扫：prettier 会把长 import 排成多行，
+    // 行首正则抓不到（复审 P2-14）；动态 import() 没有 from，天然不会误报。
     const files = []
     for (const id of pluginIds()) {
       files.push(`${id}/main.mjs`)
@@ -126,7 +128,10 @@ describe('插件类型契约', () => {
     }
     for (const rel of files) {
       const src = readFileSync(join(pluginsDir, rel), 'utf8').replace(/^\uFEFF/, '')
-      const offenders = [...src.matchAll(/^\s*(?:import|export)\b[^;'"\n]*['"](\.\.?\/[^'"]+)['"]/gm)]
+      const offenders = [
+        ...src.matchAll(/\bfrom\s*['"](\.\.?\/[^'"]+)['"]/g),
+        ...src.matchAll(/\bimport\s*['"](\.\.?\/[^'"]+)['"]/g),
+      ]
         .map((m) => m[1])
         .filter((spec) => !spec.endsWith('.d.ts'))
       assert.deepEqual(
@@ -134,6 +139,64 @@ describe('插件类型契约', () => {
         [],
         `${rel} 里出现了插件内静态 import（${offenders.join(', ')}）。` +
           '插件内模块必须走 imp() 动态加载并透传 ?v=，否则热重载会拿到旧模块。',
+      )
+    }
+  })
+
+  it('动态 import 也不能直接写相对路径（必须经 imp() 透传 ?v=）', () => {
+    // `await import('./lib/x.mjs')` 同样丢 query：复审 P2-15。imp() 是唯一合法入口，
+    // 它用 import.meta.dirname 程序化拼 URL，正则抓不到字面量——写了字面量的都是漏网
+    const files = []
+    for (const id of pluginIds()) {
+      files.push(`${id}/main.mjs`)
+      const dir = join(pluginsDir, id, 'lib')
+      if (existsSync(dir)) {
+        for (const name of readdirSync(dir)) {
+          if (name.endsWith('.mjs')) files.push(`${id}/lib/${name}`)
+        }
+      }
+    }
+    for (const rel of files) {
+      const src = readFileSync(join(pluginsDir, rel), 'utf8')
+      const pluginRoot = join(pluginsDir, rel.split('/')[0])
+      const offenders = [...src.matchAll(/\bimport\s*\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g)]
+        .map((m) => m[1])
+        // 只盯插件自身目录内的模块（会被宿主编 ?v= 的那批）。`import('../plugin-sdk')`
+        // 这类跨出插件目录的写法只出现在类型注释里，不是运行时加载
+        .filter((spec) => join(pluginRoot, spec).startsWith(pluginRoot + sep))
+      assert.deepEqual(
+        offenders,
+        [],
+        `${rel} 里出现了直写相对路径的动态 import（${offenders.join(', ')}）。` +
+          '一律走 imp()（模块内自带的动态加载帮助函数），由它透传本次激活的 ?v=。',
+      )
+    }
+  })
+
+  it('定义了 imp() 的模块必须真的透传 ?v=（Q 来自 import.meta.url）', () => {
+    // imp() 少拼一个 `+ Q`，热重载就静默退化成「改了 lib 不生效」，10 条测试全绿（复审 P2-16）
+    const files = []
+    for (const id of pluginIds()) {
+      files.push(`${id}/main.mjs`)
+      const dir = join(pluginsDir, id, 'lib')
+      if (existsSync(dir)) {
+        for (const name of readdirSync(dir)) {
+          if (name.endsWith('.mjs')) files.push(`${id}/lib/${name}`)
+        }
+      }
+    }
+    for (const rel of files) {
+      const src = readFileSync(join(pluginsDir, rel), 'utf8')
+      if (!/const imp = /.test(src)) continue
+      assert.match(
+        src,
+        /\+\s*Q\b/,
+        `${rel} 定义了 imp() 但没有把 Q 拼进 URL——热重载会拿到旧模块缓存`,
+      )
+      assert.match(
+        src,
+        /Q\s*=\s*import\.meta\.url/,
+        `${rel} 的 Q 不是从 import.meta.url 派生——版本号透传链断了`,
       )
     }
   })

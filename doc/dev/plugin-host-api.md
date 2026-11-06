@@ -15,9 +15,18 @@ plugins/<id>/
 ```
 
 manifest 的 `engines['pi-desktop']`（可选，semver range，如 `">=1.4.0"`、`"^1.2"`、`"1.x || >=2.0.0"`）
-**是会被校验的**：宿主版本不满足时插件不可激活，设置页的诊断信息里写明原因。
-支持比较符 / `^` / `~` / `x` 通配 / 空格 AND / `||` OR（实现见 `packages/shared/semver-range.ts`，
-语法不合法时放行——它是作者的自我声明，不是安全边界）。
+**是会被校验的**：宿主版本不满足时插件不可激活，但清单本身仍被读出（id/name/version 保留在
+`blockedManifest`）——设置页能看到这行插件是谁、为什么没加载，徽章是「版本不满足」，
+与清单校验失败的「清单有误」分开（复审修复前这行会整个消失，用户无从排障）。
+支持比较符 / `^` / `~` / `x` 通配 / 空格 AND / `||` OR；比较符与版本号之间允许空格
+（`">= 1.4.0"`）。缺省组件按 npm 语义展开：`"1.4"` ≙ `"1.4.x"`、`"1"` ≙ `"1.x"`、
+`">1.4"` ≙ `">=1.5.0"`、`"<=1.4"` ≙ `"<1.5.0"`、`"<1.x"` ≙ `"<1.0.0"`、`"~1"` ≙ `"1.x"`、
+`"^0"` ≙ `"<1.0.0"`、`"^0.0.x"` 锁补丁位。实现见 `packages/shared/semver-range.ts`，
+语法不合法时放行——它是作者的自我声明，不是安全边界。
+
+两个已知边界：①宿主版本带 prerelease 后缀（如 `0.7.7-fork.2`）按 semver 语义比
+`0.7.7` **小**，插件写 `">=0.7.7"` 会被拒载，下限请留出余量；②range 目标里的
+prerelease 只在写全三位时参与比较。
 
 `main.mjs` 是被 `import()` 进 **Electron main 进程**的普通 ESM 模块——`node:fs`、`node:child_process`
 都能用。也正因为如此：抛出去的异常会直接砸在主进程里，所有异步入口必须自己 try/catch。
@@ -39,7 +48,29 @@ URL 的 `?v=`。但 Node 解析静态 import 的相对路径时会**丢掉 query
   只有一个模块用的状态留在各自模块闭包里，随模块的 `dispose*()` 回收。
 
 守门：`scripts/tests/plugin-typing.test.mjs` 检查插件模块里不得出现指向插件内文件的
-静态 import、每个 lib 文件必须开 `// @ts-check` 且被 `plugins/tsconfig.json` 覆盖。
+静态 import（多行写法也算）、不得直写 `import('./x.mjs')` 这类相对路径动态导入、
+定义了 `imp()` 的模块必须真的把 `?v=` 拼进 URL；每个 lib 文件必须开 `// @ts-check`
+且被 `plugins/tsconfig.json` 覆盖。
+
+### 1.2 manifest `settings[]`（声明式设置项）
+
+字段定义在 `packages/shared/plugin-manifest.ts`（zod schema，manifest 校验会把关）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `key` | 存储键，插件内唯一（`/^[a-zA-Z][a-zA-Z0-9_.-]*$/`），也是 `ctx.settings.get()` 的 key |
+| `type` | `boolean` / `string` / `number` / `select` |
+| `label` | 表单标签；宿主不翻译，文案插件自带 |
+| `description?` | 表单下的说明文字 |
+| `default?` | 默认值，类型须与 `type` 匹配（`select` 用 string），不符 manifest 校验失败 |
+| `placeholder?` | 输入框占位文本 |
+| `options?` | `select` 必填，`{ value, label }[]` |
+| `min?` / `max?` / `step?` | `number` 的范围与步进 |
+| `multiline?` | `string` 用多行文本框 |
+| `secret?` | `string` 用密码框（仅遮挡显示，落盘文件仍是明文） |
+
+值由宿主持久化在 `plugin-data/<id>/settings.json`；插件侧只读（`ctx.settings.get()`），
+设置页表单即时保存，不进草稿体系。
 
 ## 2. ctx
 
@@ -101,8 +132,9 @@ await ctx.sessions.send({
    直接投递会导致「全新会话的第一轮没有任何 system」。宿主在空闲首轮按 `prompt()` 的顺序补齐；拿不到
    SDK 内部结构时退回原生路径（退化成投递成功但首轮缺 system，不会更坏）。
 4. 落盘是 `custom_message`（`customType: plugin_host_message`）：进模型上下文、在时间线上占用户位，
-   但带 `origin` 且正文通常自带来源前缀，界面不会当成用户自己打的字。`display: false` 的隐藏上下文
-   只进模型、不进界面。
+   但带 `origin` 且正文通常自带来源前缀，界面不会当成用户自己打的字。
+   插件投递固定 `display: true`——`PluginSendSpec` 没有 `display` 字段，插件侧没有
+   「只进模型不进界面」的口子（此前文档错误地承诺过 `display: false`，已修正）。
 
 ## 4. `ctx.sessions.onRunEvent`
 

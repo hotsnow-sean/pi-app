@@ -43,6 +43,13 @@ const children = new Map()
 /** task id → 超时定时器；不落盘，重启后按 startedAt 重算 */
 const timeouts = new Map()
 let probeTimer = null
+/**
+ * 本代是否已停用。子进程是跨代桥：deactivate 后进程还活着（设计红线：不杀任务），
+ * 它退出时旧代的 exit 监听若还在，会用**旧代的 state** save()——storage.set 是整份
+ * 覆盖，刚被新代建好的任务表会被抹掉，还会对着会话重复回报（复审 P1）。
+ * disposeTasks 摘监听是第一道闸，这个标志是第二道。
+ */
+let disposed = false
 
 export function startTask({ command, label, cwd, sessionFile, shell, timeoutSeconds }) {
   const cmd = String(command || '').trim()
@@ -99,6 +106,9 @@ export function startTask({ command, label, cwd, sessionFile, shell, timeoutSeco
     rt.state.seq = prevSeq
     tryRemoveFile(logPath)
     tryRemoveFile(errPath)
+    // powershell 的 .ps1 也是启动副产物：spawn 失败时它已经在盘上了，
+    // 不同样收掉就是一个 bg_clear 永远够不着的孤儿（复审 P2）
+    tryRemoveFile(path.join(rt.scriptDir, `${id}.ps1`))
     throw error
   }
 
@@ -175,6 +185,8 @@ function bindChild(task, child) {
 }
 
 export function finishTask(task, { code = null, signal = null, error = null } = {}) {
+  // 旧代收尾闸：停用后子进程退出不该再写盘/回报（见 disposed 的注释）
+  if (disposed) return
   clearTimeoutFor(task)
   if (children.has(task.id)) children.delete(task.id)
   if (task.status !== 'running') return
@@ -260,10 +272,14 @@ export function statSize(file) {
  * 记成 skipped + 原因，面板据此给出「重新回报」入口，语义与事实一致。
  */
 export function recover() {
+  // 测试进程里模块实例跨 activate 复用：重新激活 = 本代重新算数
+  disposed = false
   const now = Date.now()
+  let changed = false
   for (const task of rt.state.tasks) {
     if (task.status !== 'running') continue
     task.recovered = true
+    changed = true
     if (alive(task.pid)) continue
     // 宿主退出期间任务早就结束了：pid 不在，退出码永远拿不到，如实记 lost
     task.status = 'lost'
@@ -275,7 +291,9 @@ export function recover() {
     task.report = 'skipped'
     task.reportNote = '宿主重启时丢失进程，需手动重新回报'
   }
-  save()
+  // 只在确实动过表时落盘：任务表都没读到（load 失败）时这里若写盘，
+  // 空表会把磁盘上那份还没读出来的记录整个抹掉
+  if (changed) save()
   // 超时定时器不落盘：接管来的任务按 startedAt 重算剩余时间，已过期的立刻到点
   for (const task of rt.state.tasks) {
     if (task.status === 'running') armTimeout(task)
@@ -321,9 +339,19 @@ export function recover() {
  * 超时定时器只是「谁盯着」而非「任务本身」，插件卸载后不再兜底。
  */
 export function disposeTasks() {
+  disposed = true
   if (probeTimer) clearInterval(probeTimer)
   probeTimer = null
   for (const timer of timeouts.values()) clearTimeout(timer)
   timeouts.clear()
+  // 进程句柄保留（不杀任务），但监听必须摘掉：exit 回调闭包捕获的是本代的
+  // state/save/report——留着它们，旧代就会跨代写盘、重复回报（见 disposed 注释）
+  for (const child of children.values()) {
+    try {
+      child.removeAllListeners()
+    } catch {
+      /* 句柄已经失效就不必再处理 */
+    }
+  }
   children.clear()
 }

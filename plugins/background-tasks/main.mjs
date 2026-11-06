@@ -60,6 +60,7 @@ const { methods } = await imp('methods')
 
 // ---------- 生命周期 ----------
 
+/** @param {import('../plugin-sdk').PluginContext} pluginContext */
 export async function activate(pluginContext) {
   rt.ctx = pluginContext
   loadSettings()
@@ -75,11 +76,13 @@ export async function activate(pluginContext) {
     rt.ctx.log('settings updated', rt.settings)
   })
 
-  load()
+  const storageUsable = load()
   recover()
   // 收掉历史遗留的孤儿日志（被拒绝启动的、删不掉的、早期漏删的 ps1）：
-  // 它们没有任务记录，bg_clear 永远够不着，只能靠扫目录
-  sweepOrphanFiles()
+  // 它们没有任务记录，bg_clear 永远够不着，只能靠扫目录。
+  // 但任务表没读到（首次启动/读失败）时绝不能扫——空 known 集合会把
+  // 磁盘上有主日志全当孤儿删光，不可恢复（复审 P1）
+  if (storageUsable) sweepOrphanFiles()
 
   // 重启后补推托盘：托盘只在任务事件时推送，重启后没有任何事件，
   // 结果就是面板里有列表、对话框上方却毫无痕迹。面板能看到的，托盘也得能看到。
@@ -96,7 +99,8 @@ export async function activate(pluginContext) {
     async invoke(method, params) {
       if (method === 'tool.execute') {
         const { name, args, sessionFile, cwd } = params ?? {}
-        const fn = tools[String(name || '')]
+        // hasOwn 防原型链：'constructor'/'toString' 这类名字不该被当成可用工具
+        const fn = Object.hasOwn(tools, String(name || '')) ? tools[String(name || '')] : null
         if (!fn) return { text: `unknown tool: ${name}`, isError: true }
         try {
           const result = await fn(args ?? {}, { sessionFile: String(sessionFile || ''), cwd: String(cwd || '') })
@@ -105,7 +109,7 @@ export async function activate(pluginContext) {
           return { text: `${name} failed: ${error?.message ?? error}`, isError: true }
         }
       }
-      const handler = methods[method]
+      const handler = Object.hasOwn(methods, method) ? methods[method] : null
       if (!handler) throw new Error(`unknown method: ${method}`)
       return handler(params ?? {})
     },
@@ -117,4 +121,7 @@ export async function deactivate() {
   disposeTasks()
   disposeReports()
   disposeFiles()
+  // 摘掉本代伸向宿主的最后一根手指：dispose 后可能还有漏网回调（异步竞态），
+  // 它们摸到 rt.ctx 时不该再读设置/发消息/写 storage——save() 等处据此 no-op
+  rt.ctx = null
 }
