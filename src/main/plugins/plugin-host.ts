@@ -7,6 +7,15 @@ import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import { askInHost, cancelPluginUIRequests } from './plugin-ui'
 import { clearPluginComposerBars, publishPluginComposerBar } from './plugin-composer-bar'
 import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
+import type {
+  PluginAgentPromptResult,
+  PluginAgentPromptSpec,
+  PluginAskOptions,
+  PluginContext,
+  PluginInstanceApi,
+  PluginModule,
+  PluginSessionRunEvent,
+} from '@shared/plugin-context'
 import { cancelPluginToolCallsFor, pluginToolDescriptors } from './plugin-tools'
 import { workerManager } from '../worker-manager'
 import { PLUGIN_MESSAGE_CUSTOM_TYPE, type PluginMessageOrigin } from '@shared/plugin-message'
@@ -31,7 +40,7 @@ import { errorMessage } from '@shared/error-message'
 type PluginInstance = {
   manifest: PluginManifest
   dir: string
-  instance: { invoke?: (method: string, params: Record<string, unknown>) => Promise<unknown> }
+  instance: PluginInstanceApi
   deactivate?: () => unknown
   /**
    * 插件通过 ctx 注册的订阅（设置变更 / 会话运行事件）的解除函数。
@@ -68,11 +77,7 @@ function writeStorage(pluginId: string, data: Record<string, unknown>): void {
   fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(data, null, 2))
 }
 
-async function runAgentPrompt(opts: {
-  cwd: string
-  prompt: string
-  timeoutMs?: number
-}): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+async function runAgentPrompt(opts: PluginAgentPromptSpec): Promise<PluginAgentPromptResult> {
   const timeoutMs = opts.timeoutMs ?? 10 * 60_000
   let session: import('@earendil-works/pi-coding-agent').AgentSession | null = null
   try {
@@ -109,10 +114,15 @@ async function runAgentPrompt(opts: {
 /**
  * 造一份插件 ctx。
  *
+ * 返回类型标成 `PluginContext`（`packages/shared/plugin-context.ts`）不是为了好看：
+ * 对象字面量的返回位置有 **多余属性检查**，于是「类型里有的成员没实现」和
+ * 「实现了类型里没有的成员」都会是编译错误。ctx 是宿主对插件唯一的公开承诺，
+ * 让编译器守着它，比让文档守着它可靠。
+ *
  * `disposers` 由调用方（activatePlugin）持有并在停用时统一执行：ctx 上任何
  * **注册型**能力都必须把解除函数塞进去，插件侧丢不丢返回值都不影响回收。
  */
-function buildContext(pluginId: string, disposers: Array<() => void>) {
+function buildContext(pluginId: string, disposers: Array<() => void>): PluginContext {
   /** 登记一个订阅：插件主动解除时同时从登记表里摘掉，避免重复解 */
   const track = (off: () => void): (() => void) => {
     disposers.push(off)
@@ -172,7 +182,7 @@ function buildContext(pluginId: string, disposers: Array<() => void>) {
     ui: {
       ask: (
         questions: PluginUIQuestion[],
-        opts?: { timeoutMs?: number; signal?: AbortSignal },
+        opts?: PluginAskOptions,
       ): Promise<PluginUIQuestionnaireResult> => askInHost(pluginId, questions, opts),
       /**
        * 输入框上方那条托盘。插件推什么、宿主画什么样；bar 传 null 表示这个会话没有东西可显示。
@@ -239,7 +249,7 @@ function buildContext(pluginId: string, disposers: Array<() => void>) {
        * 返回解除订阅函数——插件停用/重载时必须调用，否则回调悬空。
        */
       onRunEvent: (
-        handler: (payload: { sessionFile: string; phase: string; cwd: string }) => void,
+        handler: (payload: PluginSessionRunEvent) => void,
       ): (() => void) => {
         if (typeof handler !== 'function') throw new Error('sessions.onRunEvent: handler required')
         return track(workerManager.onSessionRunEvent(handler))
@@ -270,16 +280,14 @@ export async function activatePlugin(pluginId: string): Promise<{ ok: boolean; e
     const version = fs.statSync(entryPath).mtimeMs
     const mod = (await dynamicImport(
       `file://${entryPath.split(path.sep).join('/')}?v=${version}`,
-    )) as {
-      activate?: (ctx: unknown) => Promise<unknown> | unknown
-      deactivate?: () => unknown
-    }
+    )) as PluginModule
     const ctx = buildContext(pluginId, disposers)
+    // 插件可以只做副作用（定时器、订阅）而不返回 invoke，所以 `?? {}` 是正当的
     const instance = (await mod.activate?.(ctx)) ?? {}
     active.set(pluginId, {
       manifest,
       dir: found.dir,
-      instance: instance as PluginInstance['instance'],
+      instance,
       deactivate: () => mod.deactivate?.(),
       disposers,
     })

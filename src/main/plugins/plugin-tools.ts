@@ -1,7 +1,8 @@
 import { discoverPlugins } from './plugin-manager'
 import { invokePlugin } from './plugin-host'
 import { errorMessage } from '@shared/error-message'
-import type { PluginToolDescriptor } from '@shared/plugin-manifest'
+import type { PluginToolDescriptor, PluginToolResult } from '@shared/plugin-manifest'
+import type { PluginToolExecuteParams } from '@shared/plugin-context'
 
 /**
  * 插件工具的宿主侧：目录汇总 + 执行分发。
@@ -15,17 +16,13 @@ import type { PluginToolDescriptor } from '@shared/plugin-manifest'
  * 现在还用不上。代价是工具拿不到 messages / 当前 model，够用即可。
  */
 
-type ToolResultPayload = {
+/**
+ * 回给 worker 的工具结果：插件契约（`PluginToolResult`）的线上形态。
+ * `text` 换成 pi 的 content block，其余字段原样——两边字段靠这个派生关系绑定，
+ * 加字段时不会只改一边。
+ */
+type ToolResultPayload = Omit<PluginToolResult, 'text'> & {
   content: Array<{ type: 'text'; text: string }>
-  isError?: boolean
-  /**
-   * 结构化结果（可选）。
-   *
-   * 模型读到的 content 只能是文本，插件返回对象时会被 stringify——在代码执行类模式下
-   * 调用方拿到的是字符串，还得自己 JSON.parse。把原始对象留在这里，UI 与代码模式可以
-   * 直接用它，插件也不必为了「机器可读」而把数据塞进正文。
-   */
-  details?: Record<string, unknown>
 }
 
 /** callId → 取消句柄：worker 侧 abort/超时会发 plugin-tool-cancel */
@@ -77,9 +74,14 @@ function asDetails(raw: unknown): Record<string, unknown> | undefined {
 function normalizeResult(raw: unknown): ToolResultPayload {
   if (typeof raw === 'string') return textResult(raw)
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    const obj = raw as { text?: unknown; isError?: unknown; details?: unknown }
+    const obj = raw as Partial<PluginToolResult>
     if (typeof obj.text === 'string') {
-      return { content: [{ type: 'text', text: obj.text }], ...(obj.isError === true ? { isError: true } : {}), ...(asDetails(raw) ? { details: asDetails(raw) } : {}) }
+      const details = asDetails(raw)
+      return {
+        content: [{ type: 'text', text: obj.text }],
+        ...(obj.isError === true ? { isError: true } : {}),
+        ...(details ? { details } : {}),
+      }
     }
     try {
       return { content: [{ type: 'text', text: JSON.stringify(raw) }], details: raw as Record<string, unknown> }
@@ -108,13 +110,16 @@ export async function handlePluginToolRequest(
   running.set(callId, { pluginId, controller })
   let result: ToolResultPayload
   try {
-    const r = await invokePlugin(pluginId, 'tool.execute', {
+    // satisfies 而不是 `: PluginToolExecuteParams` —— 字段拼错要报错，同时保留字面量
+    // 类型好赋给 invokePlugin 的 params（接口类型没有 index signature，反而会打架）
+    const params = {
       name: tool,
       args,
       sessionFile,
       cwd,
       signal: controller.signal,
-    })
+    } satisfies PluginToolExecuteParams
+    const r = await invokePlugin(pluginId, 'tool.execute', params)
     result =
       r.ok === true
         ? normalizeResult(r.result)

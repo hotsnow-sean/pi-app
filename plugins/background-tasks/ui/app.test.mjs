@@ -38,6 +38,45 @@ function task(id, extra = {}) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * 监听器隔离。
+ *
+ * jsdom 的 window / document 在用例之间是同一份，而 `ui/app.js` 与假宿主都是靠
+ * `addEventListener` 接事件（message / click / visibilitychange）、没有卸载入口。
+ * 每个用例都重新 `loadUi()` + `installHost()`，不清掉旧的就会累积：第 3 个用例发出
+ * 一次 `clearTasks`，前两个用例留下的 app 实例与假宿主也会响应，`calls` 里混进
+ * 上一个用例的记录（表现为「断言偶尔拿到 done1 而不是 mine」）。
+ *
+ * 做法：把两个 EventTarget 的 addEventListener 包一层，记下每次注册；
+ * afterEach 逐个 removeEventListener。
+ */
+const listenerTargets = [window, document].map((target) => ({
+  target,
+  realAdd: target.addEventListener.bind(target),
+  realRemove: target.removeEventListener.bind(target),
+  added: [],
+}))
+
+function isolateListeners() {
+  for (const entry of listenerTargets) {
+    entry.added = []
+    entry.target.addEventListener = (type, handler, opts) => {
+      entry.added.push([type, handler, opts])
+      entry.realAdd(type, handler, opts)
+    }
+  }
+}
+
+function removeListeners() {
+  for (const entry of listenerTargets) {
+    for (const [type, handler, opts] of entry.added) {
+      entry.realRemove(type, handler, opts)
+    }
+    entry.added = []
+    entry.target.addEventListener = entry.realAdd
+  }
+}
+
 async function waitFor(check, label) {
   const deadline = Date.now() + 2000
   while (Date.now() < deadline) {
@@ -99,10 +138,12 @@ beforeEach(() => {
   // 关掉 1.5s 轮询：这一组用例要证明的是「动作之后立刻刷」，靠轮询兜住的刷新
   // 正是要杜绝的现象。所有重绘都由消息 / 点击驱动。
   window.setInterval = () => 0
+  isolateListeners()
   installHost()
 })
 
 afterEach(() => {
+  removeListeners()
   window.setInterval = setInterval
 })
 
