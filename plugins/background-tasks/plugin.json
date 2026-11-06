@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -152,7 +152,7 @@
     {
       "name": "bg_list",
       "label": "列出后台任务",
-      "description": "List background tasks with their status, duration and exit code. Use it at the start of a conversation to see what is already running, or when the user asks 'what is still going'.",
+      "description": "List background tasks with their status, duration and exit code. Use it at the start of a conversation to see what is already running, or when the user asks 'what is still going'. Status 'lost' means the host restarted and the process could not be found again — it can only appear after a host restart, never mid-session, so there is no way to trigger it on demand.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -206,7 +206,7 @@
     {
       "name": "bg_clear",
       "label": "清理后台任务记录",
-      "description": "Delete finished task records (and their log files) from the list. Running tasks are kept by default — clearing is for tidying up, not for stopping work. Use it when the list has grown long and the user asks to clean it up. To remove one specific task use the panel's delete button instead.",
+      "description": "Delete finished task records (and their log files) from the list. Running tasks are kept by default — clearing is for tidying up, not for stopping work. Use it when the list has grown long and the user asks to clean it up. Pass ids (string or array) to clear specific tasks regardless of status; unknown ids are reported back as 'missing' instead of failing. Without ids, status filters which finished tasks are cleared.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -241,6 +241,20 @@
           "keepRunning": {
             "type": "boolean",
             "description": "Default true. Set false to also delete running tasks — it stops them first. Only do this when the user explicitly wants everything gone."
+          },
+          "ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Clear these task ids exactly (e.g. [\"bg-12\",\"bg-14\"]); a single string is also accepted. Takes precedence over status. Unknown ids come back as 'missing' in the result."
           }
         }
       },
