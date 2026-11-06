@@ -148,7 +148,7 @@ const ICON_CHEV =
 
 function reportBadge(task) {
   if (task.status === 'running') return ''
-  if (task.report === 'sent') return '<span class="report-badge sent">已回报</span>'
+  if (task.report === 'queued') return '<span class="report-badge sent">已投递</span>'
   if (task.report === 'failed') return '<span class="report-badge failed">回报失败</span>'
   // 为什么没回报要能一眼看到：规则不透明比不回报更让人困惑
   if (task.report === 'skipped' || task.report === 'suppressed')

@@ -188,7 +188,7 @@ type BgTask = {
   logPath: string
   bytes: number
   lines: number
-  report: 'pending' | 'sent' | 'skipped' | 'failed'
+  report: 'pending' | 'queued' | 'suppressed' | 'skipped' | 'failed'
   reportedAt?: number
 }
 ```
@@ -197,6 +197,10 @@ type BgTask = {
 
 - `sessionFile` 是回报的地址簿；**不存 sessionId**，因为会话文件是唯一稳定的锚点。
 - `report` 单独记账，回报失败不影响任务状态，面板可以重试。
+- v0.5.0 起 `sent` 改名 `queued`：sent 读起来像「用户已收到」，实际只代表已交给宿主投递
+  （可能因回合边界延迟数分钟才出现）。旧持久化记录在 `load()` 时统一迁移。
+  现在的全集：`pending` / `queued`（已投给宿主）/ `suppressed`（调用方已通过工具响应获知）/
+  `skipped`（成功且短于阈值）/ `failed`（投递失败）。
 - `lost` 是「重启后 pid 对不上」的兜底态，不是错误，要能在面板里点「重新回报」。
 
 ### 6.4 日志与增量读取
@@ -623,3 +627,52 @@ pid 不在了就记 `lost`——退出码永远拿不到，不假装知道结果
 - `e2e/plugin-background-composer-bar.spec.ts`：真实宿主里走完「出现摘要 → 点开 → 点行开右栏 →
   任务结束后摘要变成已结束」——最后一步专门证明推送链路成立（没有轮询也更新了）；点行后
   `[data-row-id]` 仍在，证明托盘没有被自己的点击收起。
+
+## 15. v0.5.0：回报消息的「转述行」与 v4 报告收尾
+
+v4 实测报告（bg-31 ~ bg-36）结论：v3 的两个真问题（孤儿回报、内联承诺矛盾）确认修复，
+工具本身到达「可以放心跑一夜」的状态。本轮处理剩余三项 + 一个长期欠账：
+
+### 15.1 回报消息与用户消息在界面上区分（转述行）
+
+**问题**：`sessions.send` 投递的回报在模型侧占「用户位」，在界面上也渲染成和用户气泡
+一模一样的右侧实底气泡——用户会看到一条「自己没说过的话」。
+
+**实现**（`plugin-message.ts` 的注释里承诺了两轮的「转述行」，这次兑现）：
+
+- origin 本来就随消息落盘（custom_message 的 `details`），只是归一化时被丢掉。
+  `worker-timeline.pluginMessageParts()` 现在把正文和 origin 一起取回
+  （origin 校验形状：`pluginId` + `label` 缺一不可，防插件乱写污染界面）；
+- 历史重建（`normalizeMessages` / `timelineItemsFromBranchPath`）给 user-message 行
+  附加 `pluginOrigin`；实时流（`worker-session-events`）在 app event 上透传同名字段；
+- renderer（`apply-app-event-message`）对带 origin 的事件**跳过乐观行合并**直接入列
+  ——合并会把用户没打完的草稿替换成回报正文；
+- `timeline.tsx` 渲染：左对齐浅底块 + 来源徽标（`后台任务 · 回报`，kind 经 i18n 映射）+
+  左侧 brand 色竖线；不渲染回溯/分叉（rewind 到插件消息没有意义）。普通用户消息
+  完全不受影响。
+
+### 15.2 `report: "sent"` 改名 `queued`
+
+v4 报告 §三#2：sent ≠ 送达，实测消息可能延迟数分钟。改名 `queued` 并在 `load()` 迁移旧值；
+UI 徽标文案「已回报」→「已投递」。schema 注释与设计文档同步。
+
+### 15.3 `bg_clear` 增加 `ids` 维度
+
+v4 报告 §三#3：API 层无法按 id 清理，脚本场景不便。`bg_clear({ ids })`（string 或 array）
+精确点名清理，无视状态（点名=明确意图，运行中的也先停后删，与 `removeTask` 语义一致）；
+不存在的 id 不报错，回 `missing` 数组——脚本场景是「尽力清」。工具层与 invoke 层原本
+各有一份重复的过滤逻辑（ids 就差点只在一份里生效），借机收敛为单一实现。
+
+### 15.4 `lost` 触发条件写进工具描述
+
+`bg_list` 描述补一句：lost 只在宿主重启后可能出现（pid 探测不到），会话内无法主动构造，
+无需再当覆盖空白对待。
+
+### 15.5 测试
+
+- `main.test.mjs` 23 → 25 条：`ids` 点名清理 + missing 回显、旧值 `sent → queued` 迁移。
+- `worker-timeline-plugin-message.test.ts` 6 → 10 条：origin 取回、坏形状防御、
+  两条归一化路径一致带 origin。
+- `worker-session-events.test.ts` +1：实时事件透传 `pluginOrigin`。
+- `apply-app-event-message.test.ts`（新）3 条：带 origin 直接入列、不吞用户草稿、
+  普通事件仍走乐观行合并。

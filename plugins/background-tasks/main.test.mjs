@@ -378,6 +378,43 @@ describe('report queue vs explicit actions', () => {
     expect(cleared.details.ids).toContain(res.details.id)
   }, 30_000)
 
+  it('clears exact ids via bg_clear({ids}) and reports unknown ones as missing', async () => {
+    const a = await start({ command: 'echo a', label: '点名A' })
+    await waitDone(a.details.id)
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { ids: [a.details.id, 'bg-404'] },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.ids).toEqual([a.details.id])
+    expect(cleared.details.missing).toEqual(['bg-404'])
+
+    const listed = await handle.invoke('listTasks', {})
+    expect(listed.tasks.some((t) => t.id === a.details.id)).toBe(false)
+  }, 30_000)
+
+  it('migrates the legacy report value sent to queued on load', async () => {
+    // v4.1 改名：sent 读起来像「用户已收到」，实际只代表已交给宿主投递。
+    // 旧持久化记录读入时必须统一迁移，否则列表语义分裂。
+    const legacyCtx = fakeCtx()
+    legacyCtx.storage.set({
+      seq: 2,
+      tasks: [
+        { id: 'bg-1', label: '旧值', status: 'exited', exitCode: 0, report: 'sent', sessionFile: 's1.jsonl' },
+        { id: 'bg-2', label: '新值', status: 'exited', exitCode: 0, report: 'queued', sessionFile: 's1.jsonl' },
+      ],
+    })
+    const legacyHandle = await activate(legacyCtx)
+    try {
+      const listed = await legacyHandle.invoke('listTasks', {})
+      const reports = Object.fromEntries(listed.tasks.map((t) => [t.id, t.report]))
+      expect(reports['bg-1']).toBe('queued')
+      expect(reports['bg-2']).toBe('queued')
+    } finally {
+      await deactivate()
+    }
+  })
+
   it('never reports a task cleared while it was still stopping', async () => {
     // 真实竞态：bg_clear({keepRunning:false}) 要先等进程退出（最长 3s），
     // 这段窗口里 exit 回调会去入队——队列若在清完之后才 flush，就是一条孤儿回报。

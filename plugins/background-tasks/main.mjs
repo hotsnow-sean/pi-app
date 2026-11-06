@@ -91,7 +91,13 @@ function load() {
     const data = ctx.storage.get() ?? {}
     state = {
       seq: Number(data.seq) || 0,
-      tasks: Array.isArray(data.tasks) ? data.tasks.filter((t) => t && typeof t.id === 'string') : [],
+      tasks: Array.isArray(data.tasks)
+        ? data.tasks
+            .filter((t) => t && typeof t.id === 'string')
+            // v4.1 起 report:'sent' 改名 'queued'：sent 读起来像「用户已收到」，
+            // 实际只代表已交给宿主投递。旧持久化记录读入时统一迁移。
+            .map((t) => (t.report === 'sent' ? { ...t, report: 'queued' } : t))
+        : [],
     }
   } catch {
     state = { seq: 0, tasks: [] }
@@ -711,7 +717,7 @@ function pruneTasks() {
 
 function scheduleReport(task) {
   // 防御性去重：同一个任务只允许被自动回报一次（retryReport 走的是显式通道）
-  if (task.report === 'sent') return
+  if (task.report === 'queued') return
   // 记录已被清理（进程退出事件可能晚于 bg_clear 到达）：再入队就是一条死链
   if (deletedIds.has(task.id)) return
   const policy = String(settings.reportPolicy || 'long')
@@ -774,7 +780,7 @@ function dropQueuedReports(ids) {
 /** 显式动作已经交付过结果：把这条的自动回报关掉，并记下原因 */
 function suppressReport(task, reason) {
   dropQueuedReports([task.id])
-  if (task.report === 'sent') return
+  if (task.report === 'queued') return
   task.report = 'suppressed'
   task.reportNote = reason
 }
@@ -872,7 +878,7 @@ async function deliver(sessionFile, items, skipped) {
       },
     })
     for (const task of live) {
-      task.report = 'sent'
+      task.report = 'queued'
       task.reportedAt = Date.now()
       delete task.tailText
     }
@@ -1077,42 +1083,26 @@ const tools = {
   },
 
   async bg_clear(args) {
+    // 逻辑收敛到 methods.clearTasks（工具层与 invoke 层曾经各写一份过滤，
+    // ids 维度就是只在一份里生效才暴露的）。这里只负责把结果格式化成给模型看的文案。
+    const res = await methods.clearTasks(args)
     const wanted = Array.isArray(args.status) ? args.status.map(String) : args.status ? [String(args.status)] : []
-    const keepRunning = args.keepRunning !== false
-    const victims = state.tasks.filter((t) => {
-      if (keepRunning && t.status === 'running') return false
-      return wanted.length === 0 || wanted.includes(t.status)
-    })
-    if (!victims.length) {
+    if (!res.cleared) {
       return {
-        text: wanted.length
-          ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
-          : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
-        details: { cleared: 0, ids: [] },
+        text: res.missing?.length
+          ? `没有匹配的任务可清理（id 不存在：${res.missing.join(', ')}）。`
+          : wanted.length
+            ? `没有状态为 ${wanted.join(' / ')} 的任务可清理。`
+            : '没有已结束的任务可清理（运行中的任务不会被清掉）。',
+        details: res,
       }
     }
-    const stopping = []
-    const ids = victims.map((t) => t.id)
-    // 先「宣布删除」再去停进程：下面的 await 最长 3s，队列可能正好在这段时间 flush
-    markDeleted(ids)
-    for (const task of victims) {
-      // keepRunning:false 时会把运行中的也纳入：必须先停进程，否则记录没了、进程还在
-      if (task.status === 'running') {
-        stopTask(task, true, 'user')
-        stopping.push(task)
-      }
-      clearTimeoutFor(task)
-    }
-    // 停进程是异步的（Windows 走 taskkill）：等它真的退出再删日志，别删了文件它还在写
-    await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
-    state.tasks = state.tasks.filter((t) => !ids.includes(t.id))
-    save()
-    for (const task of victims) removeTaskFiles(task)
-    for (const task of victims) pushBarForTask(task)
     const remaining = state.tasks.filter((t) => t.status === 'running').length
     return {
-      text: `已清理 ${ids.length} 条任务记录（${ids.join(', ')}）。${remaining ? `仍有 ${remaining} 个任务在运行。` : ''}`,
-      details: { cleared: ids.length, ids, running: remaining },
+      text: `已清理 ${res.cleared} 条任务记录（${res.ids.join(', ')}）。${
+        res.missing?.length ? `id 不存在已跳过：${res.missing.join(', ')}。` : ''
+      }${remaining ? `仍有 ${remaining} 个任务在运行。` : ''}`,
+      details: res,
     }
   },
 
@@ -1341,17 +1331,29 @@ const methods = {
     return { ok: true, id: task.id, rerunOf: source.id }
   },
 
-  async clearTasks({ status, keepRunning } = {}) {
+  async clearTasks({ status, ids, keepRunning } = {}) {
     const keep = keepRunning !== false
     const wanted = Array.isArray(status) ? status.map(String) : status ? [String(status)] : []
+    const wantedIds = Array.isArray(ids) ? ids.map(String) : ids ? [String(ids)] : []
     const victims = state.tasks.filter((t) => {
+      if (wantedIds.length > 0) return wantedIds.includes(t.id)
       if (keep && t.status === 'running') return false
       return wanted.length === 0 || wanted.includes(t.status)
     })
+    // 按 id 清理时静默跳过不存在的 id 而不是整体报错：脚本场景常是「尽力清」
+    if (wantedIds.length > 0 && victims.length === 0) {
+      return {
+        ok: true,
+        cleared: 0,
+        ids: [],
+        running: state.tasks.filter((t) => t.status === 'running').length,
+        missing: wantedIds,
+      }
+    }
     const stopping = []
-    const ids = victims.map((t) => t.id)
+    const clearedIds = victims.map((t) => t.id)
     // 与 bg_clear 同一条不变量：先宣布删除，再等进程退出
-    markDeleted(ids)
+    markDeleted(clearedIds)
     for (const task of victims) {
       if (task.status === 'running') {
         stopTask(task, true, 'user')
@@ -1360,11 +1362,19 @@ const methods = {
       clearTimeoutFor(task)
     }
     await Promise.all(stopping.map((task) => waitForTerminal(task, 3_000)))
-    state.tasks = state.tasks.filter((t) => !ids.includes(t.id))
+    state.tasks = state.tasks.filter((t) => !clearedIds.includes(t.id))
     save()
     for (const task of victims) removeTaskFiles(task)
     for (const task of victims) pushBarForTask(task)
-    return { ok: true, cleared: ids.length, ids }
+    const missing = wantedIds.filter((id) => !clearedIds.includes(id))
+    const remaining = state.tasks.filter((t) => t.status === 'running').length
+    return {
+      ok: true,
+      cleared: clearedIds.length,
+      ids: clearedIds,
+      running: remaining,
+      ...(missing.length ? { missing } : {}),
+    }
   },
 
   async removeTask({ id }) {
@@ -1392,7 +1402,7 @@ const methods = {
       if (err) task.errTailText = err
     }
     await deliver(task.sessionFile, [task], 0)
-    return { ok: task.report === 'sent', report: task.report, error: task.error ?? null }
+    return { ok: task.report === 'queued', report: task.report, error: task.error ?? null }
   },
 }
 
