@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -27,7 +27,7 @@
     {
       "name": "bg_start",
       "label": "启动后台任务",
-      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Shell defaults to the same one the bash tool uses (Git Bash on Windows); pass shell:'cmd' only when the command is genuinely cmd syntax. The result tells you whether the task will report back. Reports are delivered between turns, not mid-turn: if the conversation is idle the host starts a turn for it; if a turn is running the report queues (report:'queued') and arrives at the next turn boundary. Several tasks finishing within a few seconds are merged into one report.",
+      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Shell defaults to the same one the bash tool uses (Git Bash on Windows); pass shell:'cmd' only when the command is genuinely cmd syntax. The result tells you whether the task will report back. Reports arrive promptly: if the conversation is idle the host starts a turn for it; if a turn is running the report is steered in at the next tool-call boundary, so you see it without waiting for the turn to end. Tasks that finish together arrive in one report, each line carrying its runtime.",
       "parameters": {
         "type": "object",
         "properties": {

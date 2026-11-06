@@ -16,6 +16,8 @@ let dataDir
 let handle
 let sent = []
 let bars = []
+/** 插件注册的设置变更回调：测试里用它改 reportThresholdMs 等运行期设置 */
+let settingsChangeCb = null
 
 function fakeCtx() {
   let stored = {}
@@ -27,7 +29,12 @@ function fakeCtx() {
         stored = value
       },
     },
-    settings: { get: () => ({}), onChange: () => {} },
+    settings: {
+      get: () => ({}),
+      onChange: (cb) => {
+        settingsChangeCb = cb
+      },
+    },
     log: () => {},
     ui: {
       setComposerBar: (sessionFile, bar) => {
@@ -68,6 +75,7 @@ beforeEach(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-plugin-test-'))
   sent = []
   bars = []
+  settingsChangeCb = null
   handle = await activate(fakeCtx())
 })
 
@@ -322,21 +330,24 @@ describe('composer bar', () => {
 })
 
 describe('report queue vs explicit actions', () => {
-  it('drops a queued report when its record is cleared', async () => {
-    // 失败任务必回报：结束后立刻进队列，5 秒合并窗口后才投递
+  it('reports a failed task immediately and does not repeat it after clearing', async () => {
+    // 投递即时化后，「已完成任务被清理」几乎不可能抢在回报前面（清理是人的时间尺度，
+    // 投递是下一个 tick）；孤儿回报的真防线是 markDeleted-before-await，
+    // 由「never reports a task cleared while it was still stopping」覆盖。
+    // 这里钉住新的时序：失败 → 立刻回报 → 清理 → 不再有第二条。
     const res = await start({ command: 'echo boom; exit 3', label: '会失败' })
     await waitDone(res.details.id)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(sent).toHaveLength(1)
+    expect(sent[0].content).toContain(res.details.id)
 
-    const cleared = await handle.invoke('tool.execute', {
+    await handle.invoke('tool.execute', {
       name: 'bg_clear',
       args: { status: ['failed'] },
       sessionFile: 's1.jsonl',
     })
-    expect(cleared.details.ids).toContain(res.details.id)
-
-    // 合并窗口过去后也不该有条指向已删任务的回报
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
-    expect(sent).toHaveLength(0)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(sent).toHaveLength(1)
   }, 30_000)
 
   it('suppresses the automatic report once bg_stop delivered the terminal state', async () => {
@@ -348,7 +359,7 @@ describe('report queue vs explicit actions', () => {
     })
     expect(stopped.details.settled).toBe(true)
 
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
     expect(sent).toHaveLength(0)
     const listed = await handle.invoke('listTasks', {})
     expect(listed.tasks.find((t) => t.id === res.details.id).report).toBe('suppressed')
@@ -362,7 +373,7 @@ describe('report queue vs explicit actions', () => {
     expect(res.details.returnedInline).toBe(true)
     expect(res.details.report).toBe('suppressed')
 
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
     expect(sent).toHaveLength(0)
   }, 30_000)
 
@@ -468,7 +479,7 @@ describe('report queue vs explicit actions', () => {
     })
     expect(cleared.details.ids).toContain(res.details.id)
 
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
     expect(sent).toHaveLength(0)
   }, 30_000)
 })
@@ -520,4 +531,37 @@ describe('structured output', () => {
       expect(out.details.chunkBytes, `tailLines=${want}`).toBeLessThan(out.details.totalBytes)
     }
   }, 60_000)
+})
+
+describe('delivery semantics (v0.6.0)', () => {
+  it('steers the report into the conversation', async () => {
+    // 忙时插话（下一个工具调用边界）、闲时宿主照旧开新轮——及时性是回报的全部价值
+    const res = await start({ command: 'exit 3', label: '插话回报' })
+    await waitDone(res.details.id)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(sent).toHaveLength(1)
+    expect(sent[0].deliverAs).toBe('steer')
+  }, 30_000)
+
+  it('tailors the directive to the batch: failure gets an action prompt', async () => {
+    const res = await start({ command: 'echo boom; exit 3', label: '失败指令' })
+    await waitDone(res.details.id)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(sent).toHaveLength(1)
+    expect(sent[0].content).toContain('可能影响后续步骤')
+    expect(sent[0].content).not.toContain('仅供知晓')
+    // 每条任务行自带运行时长
+    expect(sent[0].content).toMatch(/耗时 \d/)
+  }, 30_000)
+
+  it('tailors the directive to the batch: pure success stays low-key', async () => {
+    // 成功但超过 15s 阈值才回报：sleep 16 太慢，把阈值调到 1s
+    settingsChangeCb?.({ reportThresholdMs: 1_000 })
+    const res = await start({ command: 'sleep 2 && echo ok', label: '成功指令' })
+    await waitDone(res.details.id)
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    expect(sent).toHaveLength(1)
+    expect(sent[0].content).toContain('仅供知晓')
+    expect(sent[0].content).not.toContain('可能影响后续步骤')
+  }, 30_000)
 })

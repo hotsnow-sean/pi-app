@@ -33,7 +33,6 @@ const MIN_READ_BYTES = 64
 const MAX_OUTPUT_WAIT_MS = 30_000
 /** bg_stop 的终态等待上限 */
 const MAX_STOP_WAIT_MS = 10_000
-const MERGE_WINDOW_MS = 5_000
 const MAX_DETAILED_REPORTS = 3
 const REPORT_TAIL_LINES = 20
 const REPORT_MAX_CHARS = 8_000
@@ -60,7 +59,7 @@ let probeTimer = null
 let unsubscribeRuns = null
 /** sessionFile → 最近一次见到的 run phase（仅用于面板提示，不参与投递决策） */
 const sessionPhases = new Map()
-/** sessionFile → { items: BgTask[], timer } 合并窗口 */
+/** sessionFile → { items, timer } 待投递批次 */
 const reportQueues = new Map()
 /**
  * 已判定「不该再有任何回报」的 id。
@@ -727,6 +726,9 @@ function scheduleReport(task) {
   if (task.report === 'queued') return
   // 记录已被清理（进程退出事件可能晚于 bg_clear 到达）：再入队就是一条死链
   if (deletedIds.has(task.id)) return
+  // 显式动作（内联回执 / bg_stop 等终态）正拿着回报权：flush 现在是即时的，
+  // 不扣住的话自动回报会在显式路径的 suppressReport 之前跑掉，变成重复消息
+  if (task.reportHold) return
   const policy = String(settings.reportPolicy || 'long')
   const skip = (reason) => {
     task.report = 'skipped'
@@ -756,11 +758,12 @@ function enqueueReport(task) {
   task.report = 'pending'
   queue.items.push(task)
   if (queue.timer) return
-  // 合并窗口：同一会话短时间内的多个完成事件只唤醒一次
+  // 不再等合并窗口：任务一结束就投。0ms 的 tick 只用来把同一事件循环里
+  // 连续结束的任务（比如并行批次被一起杀掉）凑进同一批，不引入真实延迟。
   queue.timer = setTimeout(() => {
     queue.timer = null
     void flushReports(key)
-  }, MERGE_WINDOW_MS)
+  }, 0)
 }
 
 /**
@@ -768,7 +771,6 @@ function enqueueReport(task) {
  *
  * 两种来源：记录被删/被清（回报会指向一个不存在的任务，用户看到的是死链），
  * 以及用户已经在 bg_stop 里同步拿到了终态（再推一遍是重复信息）。
- * 只动队列不动 timer 的话，用户仍会在 5 秒后收到一条幽灵回报。
  */
 function dropQueuedReports(ids) {
   const set = new Set(ids)
@@ -795,7 +797,7 @@ function suppressReport(task, reason) {
 /**
  * 删除流程的统一入口：先「宣布死亡」，再慢慢收尸。
  *
- * 调用点必须在任何 await 之前——队列的 flush 是异步的（合并窗口 + 读日志文件），
+ * 调用点必须在任何 await 之前——队列的 flush 是异步的（读日志文件），
  * 只删记录不先标记，就会出现「记录没了、回报照发」的孤儿消息。
  */
 function markDeleted(ids) {
@@ -859,7 +861,13 @@ function buildReport(items, skipped) {
     blocks.push(lines.join('\n'))
   }
   if (skipped > 0) blocks.push(`另外还有 ${skipped} 个任务也结束了，详见面板「后台任务」。`)
-  blocks.push('请基于以上结果继续你的工作，不要重复启动相同的任务。')
+  // 处理指令随批次状态切换（方案 C）：回报与当前工作的相关性插件判断不了，
+  // 但「有没有失败项」是事实——成功的轻描淡写，失败的提示及时处理。
+  blocks.push(
+    items.some((t) => t.status !== 'exited')
+      ? '以上有失败任务，可能影响后续步骤：与当前工作相关时请及时调整计划；否则向用户简报失败情况后继续。不要盲目重启失败的任务——先用 bg_output 确认原因或与用户确认。'
+      : '以上任务仅供知晓，继续当前工作即可；若与手头工作直接相关，可顺手利用其结果，不要重复启动相同的任务。',
+  )
   return blocks.join('\n\n')
 }
 
@@ -877,6 +885,10 @@ async function deliver(sessionFile, items, skipped) {
     await ctx.sessions.send({
       sessionFile,
       content,
+      // 忙时插话：回报的价值就在及时——模型布置完任务可能去跑长活，等到轮边界
+      // 才送达会拖几分钟甚至整个回合。steer 在下一个工具调用边界注入，正好是
+      // 模型有空看一眼的位置；会话空闲时宿主照旧立即开新轮，两条路都覆盖。
+      deliverAs: 'steer',
       origin: {
         pluginId: PLUGIN_ID,
         label: '后台任务',
@@ -1000,11 +1012,15 @@ function reportOutlook(task) {
  * 极短的命令（<2s）在工具返回时就已结束：直接把尾巴带上，省一次 bg_output 往返。
  */
 async function describeStart(task) {
+  // 启动回执要等 120ms 看是否秒结束；这期间 exit 回调可能已经入队并即时 flush。
+  // 先扣住自动回报：回执若内联带了结果就 suppress，任务还活着就放行。
+  task.reportHold = true
   await new Promise((resolve) => setTimeout(resolve, 120))
   const fresh = taskById(task.id)
   if (fresh && fresh.status !== 'running') {
     // 回执已经把终态完整交给调用方了：自动回报必须让位。
     // 否则文案写着「不会再单独回报」，几秒后又收到一条，等于自己打自己的脸。
+    delete fresh.reportHold
     suppressReport(fresh, '启动回执里已带完整结果（内联返回）')
     const tail = await tailOf(fresh)
     const errTail = fresh.errBytes > 0 ? await tailOf(fresh, 'err') : ''
@@ -1030,6 +1046,8 @@ async function describeStart(task) {
       .join('\n')
     return { text, details }
   }
+  // 还在跑：放行自动回报（内联窗口已过，之后结束的走正常回报流程）
+  delete task.reportHold
   const outlook = reportOutlook(task)
   const details = {
     id: task.id,
@@ -1184,8 +1202,13 @@ const tools = {
     const task = taskById(String(args.id || ''))
     if (!task) throw new Error(`unknown task: ${args.id}`)
     const stopped = stopTask(task, args.force === true)
+    // 要同步等终态：先扣住自动回报，否则进程在这段等待里退出时，
+    // exit 回调会即时 flush 一条回报，抢在下面的 suppressReport 之前
+    const watch = stopped && (args.waitMs ?? 0) > 0
+    if (watch) task.reportHold = true
     const settled = stopped ? await waitForTerminal(task, args.waitMs ?? 0) : true
-    // 结果已经在这个工具返回里交付了：撤掉排队中的自动回报，否则 5 秒后又来一条一样的
+    if (watch) delete task.reportHold
+    // 结果已经在这个工具返回里交付了：撤掉排队中的自动回报，否则稍后又来一条一样的
     if (stopped && settled) suppressReport(task, '已在 bg_stop 中同步拿到终态')
     const details = {
       id: task.id,
@@ -1447,7 +1470,8 @@ export async function activate(pluginContext) {
   load()
   recover()
 
-  // 会话忙闲：只为面板提示与将来的 deliverAs 决策留痕，不参与「要不要回报」
+  // 会话忙闲：只为面板提示留痕，不参与「要不要回报」（投递走 deliverAs:steer，
+  // 忙闲由宿主 worker 侧消化）
   try {
     unsubscribeRuns = ctx.sessions?.onRunEvent?.((payload) => {
       if (payload?.sessionFile) sessionPhases.set(payload.sessionFile, payload.phase)
