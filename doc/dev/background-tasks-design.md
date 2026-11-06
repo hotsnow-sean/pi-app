@@ -1078,3 +1078,54 @@ v8 报告把功能与文案问题都清零了，剩下两条都是**文件卫生
 `main.test.mjs` 新增 3 条（增量读、lost 语义、reportError），
 新建 `src/main/plugins/__tests__/plugin-host-entry.test.ts` 3 条（路径穿越，
 回滚验证过会失败）。插件 43 条 + 宿主插件层 8 条全过。
+
+## 25. 托盘词表通用化（审查批次 2）：宿主不再说某个插件的方言
+
+### 25.1 问题
+
+`packages/shared/plugin-composer-bar.ts` 原本写的是：
+
+```ts
+type RowStatus = 'running' | 'exited' | 'failed' | 'stopped' | 'lost'
+tone: 'running' | 'done' | 'error'
+row.action?: 'stop'
+```
+
+这五个词**就是后台任务的状态机**（`stopped` 还是它的专属语义：用户停/超时/日志超限），
+而宿主 renderer 直接按它们选图标配色，认不出的值静默回落成「运行中圆圈」。
+后果是任何第二个想用托盘的插件，要么说这个插件的方言，要么被显示错——
+从那一刻起宿主契约就被一个插件绑架了。
+
+### 25.2 改法
+
+词表只留「观感」，业务语义归插件：
+
+| 旧 | 新 | 说明 |
+|---|---|---|
+| `status: 'running' \| 'exited' \| 'failed' \| 'stopped' \| 'lost'` | `state: 'active' \| 'ok' \| 'error' \| 'idle' \| 'warn'` | 认不出就按 `active` 画 |
+| `tone: 'running' \| 'done' \| 'error'` | `tone: 'active' \| 'ok' \| 'error'` | 同上 |
+| `action?: 'stop'` | `actions?: Array<{ id, icon?, title? }>` | `id` 是插件自定义的动作 id，宿主原样回传 |
+
+映射表从宿主的 switch 挪进插件（`rowStateOf`）：`running→active`、`exited→ok`、
+`lost→warn`、`stopped→idle`、其余 `error`。宿主侧只剩「观感 → 图标/配色」一张表，
+与任何插件的状态机无关。
+
+回调仍是一个方法，但语义变了：点行固定传 `select`（宿主唯一的保留字），
+点行内按钮则原样回传插件定义的 id。宿主不再枚举它认识的业务动作。
+
+### 25.3 顺带：`kind` 的文案也外移
+
+`PluginMessageOrigin` 增加 `kindLabel?: string`，后台任务传「回报」。
+此前宿主 i18n 里专门有 `pluginMessage.kindReport`，等于「半解释」：`report` 有中文，
+其他插件的 kind 只能原样显示英文标识符。现在宿主只认 `label`，kind 的措辞由插件自带；
+对应 i18n 键与类型重复（`plugin-message-note.tsx` 自己那份 `PluginMessageOrigin`）一并删掉。
+
+### 25.4 测试
+
+- 新增 `packages/shared/plugin-composer-bar.test.ts` 4 条：业务词一律回落成观感默认、
+  动作 id 原样保留且未知图标被剥掉、坏字段整段丢弃、空内容返回 null。
+  第一条就是「宿主不认识 running/lost」的契约。
+- `composer-plugin-bar.test.tsx` 新增 1 条：插件把动作叫 `kill` 也照样回传
+  （证明宿主不再持有 `stop` 这个动词）。
+- 插件侧 bar 用例改按新词表断言（`tone:'active'` / `row.state` / `row.actions`）。
+- 插件版本 → **v0.7.0**（托盘载荷是破坏性变更，内置插件与宿主同步发）。

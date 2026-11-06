@@ -25,7 +25,7 @@ function barOf(summary: string) {
   return {
     summary,
     detail: '',
-    tone: 'running' as const,
+    tone: 'active' as const,
     rows: [],
   }
 }
@@ -48,7 +48,7 @@ describe('plugin composer bar registry', () => {
   })
 
   it('publish null 把该会话的托盘移出状态表（仍广播，供在线 renderer 清理）', () => {
-    publishPluginComposerBar('p1', '/ws/a.jsonl', barOf('running'))
+    publishPluginComposerBar('p1', '/ws/a.jsonl', barOf('active'))
     publishPluginComposerBar('p1', '/ws/a.jsonl', null)
     expect(listPluginComposerBars()).toEqual([])
     expect(sendEvent).toHaveBeenCalledTimes(2)

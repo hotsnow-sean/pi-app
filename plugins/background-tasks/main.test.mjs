@@ -301,14 +301,16 @@ describe('composer bar', () => {
     const other = await start({ command: 'sleep 20', label: '别的会话' }, { sessionFile: 'C:/w/b/sess-2.jsonl' })
 
     const last = bars.filter((b) => b.sessionFile === 'C:/w/a/sess-1.jsonl').at(-1)
-    expect(last.bar.tone).toBe('running')
+    expect(last.bar.tone).toBe('active')
     const ids = last.bar.rows.map((r) => r.id)
     expect(ids).toContain(mine.details.id)
     expect(ids).not.toContain(other.details.id)
-    // 运行中的行必须带 startedAt 与 stop：宿主靠前者现算耗时，靠后者给停止按钮
+    // 运行中的行必须带 startedAt 与停止动作：宿主靠前者现算耗时，靠后者给按钮。
+    // 注意行状态用的是宿主观感词（active），不是本插件的 running。
     const row = last.bar.rows.find((r) => r.id === mine.details.id)
     expect(row.startedAt).toBeGreaterThan(0)
-    expect(row.action).toBe('stop')
+    expect(row.state).toBe('active')
+    expect(row.actions).toEqual([{ id: 'stop', icon: 'stop', title: '停止' }])
 
     // 大小写/分隔符不同也要归到同一个会话（宿主与工具侧的 sessionFile 来源不同）
     const same = await handle.invoke('refreshBar', { sessionFile: 'c:\\w\\a\\sess-1.jsonl' })
@@ -323,8 +325,9 @@ describe('composer bar', () => {
     const res = await start({ command: 'echo bye', label: '短命' })
     await waitDone(res.details.id)
     const done = bars.filter((b) => b.sessionFile === 's1.jsonl').at(-1)
-    expect(done.bar.tone).toBe('done')
-    expect(done.bar.rows[0].status).toBe('exited')
+    expect(done.bar.tone).toBe('ok')
+    // 子进程正常退出 → 观感 ok；宿主不认识 'exited'，那是插件的状态机
+    expect(done.bar.rows[0].state).toBe('ok')
 
     await handle.invoke('removeTask', { id: res.details.id })
     expect(bars.at(-1).bar).toBeNull()

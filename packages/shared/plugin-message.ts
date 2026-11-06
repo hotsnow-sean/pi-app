@@ -26,6 +26,14 @@ export type PluginMessageOrigin = {
   label: string
   /** 插件自定的细分类型（report / notice / …），宿主不解释，只用于样式与筛选 */
   kind?: string
+  /**
+   * `kind` 的界面文案，插件自带（如「回报」）。
+   *
+   * 为什么不是宿主按 kind 查表：那等于把某个插件的词汇写进宿主的 i18n，
+   * 其他 kind 又只能原样显示英文标识符——半解释比不解释更糟。宿主只认 label，
+   * 其余一律由插件把话说全。
+   */
+  kindLabel?: string
   /** 补充说明，如任务标签 */
   detail?: string
 }

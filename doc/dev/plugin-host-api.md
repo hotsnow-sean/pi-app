@@ -44,7 +44,8 @@ await ctx.sessions.send({
   origin?: {                    // 界面上标来源，不冒充用户输入
     pluginId: string
     label: string
-    kind?: string               // 'report' / 'notice' / …
+    kind?: string               // 'report' / 'notice' / …，宿主不解释
+    kindLabel?: string          // kind 的界面文案，插件自带（如「回报」）
     detail?: string
   },
   deliverAs?: 'steer' | 'followUp' | 'nextTurn',
@@ -133,21 +134,34 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 ctx.ui.setComposerBar(sessionFile, {
   summary: '2 个任务在运行',   // 摘要行主文案，插件自己组织语言
   detail: '构建桌面端',        // 摘要行次要文案（通常是当前任务）
-  tone: 'running',            // running | done | error，只影响图标与色调
+  tone: 'active',             // active | ok | error，只影响图标与色调
   rows: [                     // 展开后最多 8 行
-    { id: 'bg-3', label: '构建桌面端', status: 'running', startedAt: Date.now(), action: 'stop' }
+    {
+      id: 'bg-3',             // 插件自己的行 id
+      label: '构建桌面端',
+      state: 'active',        // active | ok | error | idle | warn —— 只表达观感
+      startedAt: Date.now(),  // 进行中的行：宿主据此显示实时耗时
+      actions: [{ id: 'stop', icon: 'stop', title: '停止' }],
+    },
   ],
   panelId: 'plugin:<id>:<panel>',  // 点行时宿主打开这个右栏面板
 } | null)
 ```
 
+**词表是「观感」不是「业务」**：宿主只认 `active/ok/error/idle/warn` 这五个状态词与
+`active/ok/error` 三个语气词，认不出的值一律按 `active` 画。插件自己的状态机（比如
+`running/exited/lost`）留在插件里，由插件决定映射到哪种观感——**不要指望宿主认识你的业务状态名**。
+
 约定与边界：
-- **`rows[].startedAt`**：给了就由宿主显示实时耗时。运行中的行别自己算一个「12s」推上来——
+- **`rows[].startedAt`**：给了就由宿主显示实时耗时。进行中的行别自己算一个「12s」推上来——
   推一次就固化的数字会骗人。
-- **`rows[].action: 'stop'`**：行尾出现停止按钮。点击后宿主回调
-  `invoke('composerBarAction', { action: 'stop', id })`。
+- **`rows[].actions[]`**：行尾按钮。`id` 是**插件自己定义的动作 id**，点击后原样回传：
+  `invoke('composerBarAction', { action: <你的 id>, id: <行 id> })`；宿主只负责画，
+  不解释 id 的含义。`icon` 由宿主枚举（目前只有 `'stop'`，省略即按它画），
+  `title` 是悬浮提示（插件自带文案，不给则用宿主的中文兜底）。
 - **点行**：宿主先打开 `panelId`（若该面板真实存在），再回调
-  `composerBarAction({ action: 'select', id })`。插件用这个方法记账/定位，不给也能用（就是打不开详情）。
+  `composerBarAction({ action: 'select', id })`。`select` 是宿主唯一的保留字（表示「看详情」），
+  插件的动作 id 不要叫这个名字。插件用这个方法记账/定位，不给也能用（就是打不开详情）。
 - 这条**不是第二个面板**：只有摘要 + 若干行。要展示命令全文、实时输出、分页，放右栏。
 - 一个会话可以有多条（不同插件），各占一行；插件推 `null` 表示自己在这个会话没话说，
   托盘随之消失，**不会留一条空壳把输入框顶下去**。

@@ -27,6 +27,8 @@ vi.mock('@renderer/lib/ipc-client', () => ({
   ipcClient: { invoke: vi.fn().mockResolvedValue({ ok: true }) },
 }))
 
+import { ipcClient } from '@renderer/lib/ipc-client'
+
 vi.mock('@renderer/stores/ui-store', () => ({
   useUIStore: Object.assign(
     (selector: (s: typeof state) => unknown) => selector(state),
@@ -41,6 +43,7 @@ describe('ComposerPluginBars', () => {
     state.toggleAdapterWidget.mockClear()
     state.setActivePanel.mockClear()
     state.revealRightPanel.mockClear()
+    vi.mocked(ipcClient.invoke).mockClear()
   })
 
   it('renders nothing when no plugin has anything to say', () => {
@@ -53,8 +56,16 @@ describe('ComposerPluginBars', () => {
       'background-tasks': {
         summary: '1 个任务在运行',
         detail: '构建桌面端',
-        tone: 'running',
-        rows: [{ id: 'bg-1', label: '构建桌面端', status: 'running', startedAt: Date.now(), action: 'stop' }],
+        tone: 'active',
+        rows: [
+          {
+            id: 'bg-1',
+            label: '构建桌面端',
+            state: 'active',
+            startedAt: Date.now(),
+            actions: [{ id: 'stop', icon: 'stop' }],
+          },
+        ],
         panelId: 'plugin:background-tasks:tasks',
       },
     }
@@ -80,10 +91,22 @@ describe('ComposerPluginBars', () => {
     state.pluginComposerBars = {
       'background-tasks': {
         summary: '2 个任务在运行',
-        tone: 'running',
+        tone: 'active',
         rows: [
-          { id: 'bg-1', label: '构建桌面端', status: 'running', startedAt: Date.now(), action: 'stop' },
-          { id: 'bg-2', label: '跑测试', status: 'running', startedAt: Date.now(), action: 'stop' },
+          {
+            id: 'bg-1',
+            label: '构建桌面端',
+            state: 'active',
+            startedAt: Date.now(),
+            actions: [{ id: 'stop', icon: 'stop' }],
+          },
+          {
+            id: 'bg-2',
+            label: '跑测试',
+            state: 'active',
+            startedAt: Date.now(),
+            actions: [{ id: 'stop', icon: 'stop' }],
+          },
         ],
         panelId: 'plugin:background-tasks:tasks',
       },
@@ -98,13 +121,49 @@ describe('ComposerPluginBars', () => {
     expect(state.revealRightPanel).toHaveBeenCalled()
   })
 
+  it('forwards the plugin-defined action id instead of a host-owned verb', () => {
+    // 宿主不认识 'kill' 是什么——它只负责把插件定义的 id 原样回传。
+    // 这正是「托盘词表去业务化」的核心：新插件不必说后台任务的方言。
+    state.pluginComposerBars = {
+      'some-plugin': {
+        summary: '1 个作业',
+        tone: 'active',
+        rows: [
+          {
+            id: 'job-1',
+            label: '导出报表',
+            state: 'active',
+            startedAt: Date.now(),
+            actions: [{ id: 'kill', icon: 'stop', title: '终止' }],
+          },
+        ],
+      },
+    }
+    state.adapterWidgetExpandedBySession['/s.jsonl\u0000plugin-bar\u0000some-plugin'] = true
+    render(<ComposerPluginBars />)
+
+    fireEvent.click(screen.getByTitle('终止'))
+    expect(vi.mocked(ipcClient.invoke)).toHaveBeenCalledWith('plugin.invoke', {
+      pluginId: 'some-plugin',
+      method: 'composerBarAction',
+      params: { action: 'kill', id: 'job-1' },
+    })
+
+    fireEvent.click(screen.getByTitle('导出报表'))
+    expect(vi.mocked(ipcClient.invoke)).toHaveBeenCalledWith('plugin.invoke', {
+      pluginId: 'some-plugin',
+      method: 'composerBarAction',
+      params: { action: 'select', id: 'job-1' },
+    })
+  })
+
   it('shows a finished bar without a stale duration', () => {
     state.pluginComposerBars = {
       'background-tasks': {
         summary: '1 个任务已结束',
         detail: '构建桌面端',
-        tone: 'done',
-        rows: [{ id: 'bg-2', label: '构建桌面端', status: 'exited', meta: '1.2s' }],
+        tone: 'ok',
+        rows: [{ id: 'bg-2', label: '构建桌面端', state: 'ok', meta: '1.2s' }],
       },
     }
     render(<ComposerPluginBars />)
