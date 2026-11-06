@@ -1,17 +1,249 @@
 {
   "id": "scheduler",
   "name": "定时任务",
-  "version": "0.1.0",
-  "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月 / 间隔，支持有效期、启停、立即运行与执行历史。",
+  "version": "0.2.0",
+  "description": "定时触发 agent 执行 prompt：一次性 / 每天 / 每周 / 每月 / 间隔，支持有效期、启停、立即运行、条件通知与运行历史。",
   "icon": "Clock",
   "main": "main.mjs",
   "views": [
     {
       "id": "main",
       "title": "定时任务",
-      "description": "中央工作区：任务列表、新建/编辑、运行记录",
+      "description": "任务列表、下次执行、运行记录与结果",
       "icon": "Clock",
       "entry": "ui/index.html"
+    }
+  ],
+  "tools": [
+    {
+      "name": "sched_create",
+      "label": "创建定时任务",
+      "description": "Create a scheduled task that runs a prompt automatically at a future time, and keeps running across restarts until the user disables or deletes it. Use it whenever the user says things like 'every day at 8:30 summarize my day', 'every Monday write a weekly report', 'remind me tomorrow at 3pm'. One-off reminders also use this tool with kind:'once' — do not use any other mechanism for time-based reminders. IMPORTANT: each run happens in a brand-new headless session that cannot see this conversation and cannot call plugin tools (only built-in bash/read/write/find/grep/ls), so the prompt must be fully self-contained: say what to do, where, and what output format you want. Never write 'same as before' or refer to earlier context. Call sched_list first if you suspect a similar task already exists; creating a duplicate is rejected.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Short, recognizable name shown in the task list, e.g. '每日简报' or 'npm 构建检查'. Max 60 characters."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The complete instruction handed to the agent at run time. Self-contained: what to do, in which directory, and what the answer should look like. Max 8000 characters."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["once", "daily", "weekly", "monthly", "interval"],
+            "description": "Repeat mode. daily/weekly/monthly use `time`; interval uses `everyMinutes`; once uses `at`."
+          },
+          "time": {
+            "type": "string",
+            "description": "Local time 'HH:mm' for daily/weekly/monthly. Default 09:00."
+          },
+          "weekday": {
+            "type": "integer",
+            "description": "For weekly: 0=Sunday … 6=Saturday. Default 1 (Monday)."
+          },
+          "day": {
+            "type": "integer",
+            "description": "For monthly: 1-31. If the month has no such day, the last day of that month is used."
+          },
+          "everyMinutes": {
+            "type": "integer",
+            "description": "For interval: minutes between runs, 1-43200. Multiples of 60 are displayed as hours."
+          },
+          "at": {
+            "type": "string",
+            "description": "For once: ISO 8601 local date-time, e.g. 2026-11-07T09:00. Omit for 'five minutes from now'. A time in the past is rejected."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Absolute working directory for the run. Defaults to the current session's directory — usually leave it out."
+          },
+          "validUntil": {
+            "type": "string",
+            "description": "Last valid day, inclusive, as YYYY-MM-DD. Omit for no end date."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Default true. false creates the task but leaves it paused."
+          },
+          "notifyPolicy": {
+            "type": "string",
+            "enum": ["always", "on-change", "failures", "never"],
+            "description": "When to notify the user after a run. Defaults to on-change (notify only when the result differs from last time, or when the run fails). Use 'always' for reminders ('drink water') where every run matters, and 'on-change' for monitoring tasks (issues, feeds, builds)."
+          }
+        },
+        "required": ["name", "prompt", "kind"]
+      },
+      "card": {
+        "template": "kv",
+        "icon": "Clock"
+      }
+    },
+    {
+      "name": "sched_list",
+      "label": "列出定时任务",
+      "description": "List scheduled tasks with their id, schedule, next run time and last result. Call it before sched_update/sched_delete to get the id instead of guessing, when the user asks 'what tasks do I have', or to check whether something is already scheduled.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Show full details for one task (prompt included) instead of the short list."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["all", "enabled", "disabled", "active"],
+            "description": "'all' (default), 'enabled', 'disabled', or 'active' (currently queued/running)."
+          }
+        }
+      },
+      "card": {
+        "template": "list",
+        "icon": "ListChecks"
+      }
+    },
+    {
+      "name": "sched_update",
+      "label": "修改定时任务",
+      "description": "Change an existing scheduled task: name, prompt, schedule, working directory, end date, enabled state or notify policy. Only pass the fields that should change — everything else is kept. Get the id from sched_list first. After a schedule change the next run time is recomputed and repeated back to the user, so they can catch a wrong weekday or month immediately. Prefer this over delete+create when changing an existing task: history stays attached.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Task id from sched_list, e.g. task-20261106-a1b2c3."
+          },
+          "name": {
+            "type": "string",
+            "description": "New name, max 60 characters."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "New prompt. Changing it also resets the 'changed since last run' baseline."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["once", "daily", "weekly", "monthly", "interval"],
+            "description": "New repeat mode."
+          },
+          "time": {
+            "type": "string",
+            "description": "New local time 'HH:mm' (daily/weekly/monthly)."
+          },
+          "weekday": {
+            "type": "integer",
+            "description": "New weekday for weekly: 0=Sunday … 6=Saturday."
+          },
+          "day": {
+            "type": "integer",
+            "description": "New day-of-month for monthly: 1-31."
+          },
+          "everyMinutes": {
+            "type": "integer",
+            "description": "New interval in minutes (1-43200) for interval mode."
+          },
+          "at": {
+            "type": "string",
+            "description": "New ISO 8601 local date-time for once mode; a time in the past is rejected."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "New absolute working directory. Empty string = use the default directory."
+          },
+          "validUntil": {
+            "type": "string",
+            "description": "New last valid day YYYY-MM-DD; empty string removes the end date."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "false pauses the task, true re-enables it."
+          },
+          "notifyPolicy": {
+            "type": "string",
+            "enum": ["always", "on-change", "failures", "never"],
+            "description": "New notification policy for this task."
+          }
+        },
+        "required": ["id"]
+      },
+      "card": {
+        "template": "kv",
+        "icon": "Pencil"
+      }
+    },
+    {
+      "name": "sched_delete",
+      "label": "删除定时任务",
+      "description": "Permanently delete a scheduled task and all of its run history. Only call this when the user explicitly asks to delete it. To merely stop it from running, use sched_update with enabled:false — that keeps the task and its history. Get the id from sched_list first.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Task id from sched_list."
+          }
+        },
+        "required": ["id"]
+      },
+      "card": {
+        "template": "kv",
+        "icon": "Trash2"
+      }
+    },
+    {
+      "name": "sched_run_now",
+      "label": "立即运行定时任务",
+      "description": "Run a scheduled task once, right now, without changing its regular schedule. Use it when the user says 'run it now' or wants to test a task they just created. The run is queued and executed serially, so it may wait for other runs. Unless waitMs is given the reply only confirms the run was queued; pass waitMs (e.g. 20000) when the user expects the result in this turn. If the task is already running, nothing is queued twice — the reply says so.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Task id from sched_list."
+          },
+          "waitMs": {
+            "type": "number",
+            "description": "Wait up to this many milliseconds (max 30000) for the run to finish, so the reply can include the result. Omit to return immediately."
+          }
+        },
+        "required": ["id"]
+      },
+      "card": {
+        "template": "kv",
+        "icon": "Play"
+      }
+    },
+    {
+      "name": "sched_runs",
+      "label": "查询运行记录",
+      "description": "Read past runs of scheduled tasks: status, duration, trigger (scheduled/missed/manual), and optionally the result text. Use it when the user asks 'did it run', 'how did last night's run go', or 'what did it say'. By default it returns summaries only; pass withOutput:true when the user asks what the run actually produced.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "Only runs of this task. Omit for all tasks."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["ok", "failed", "skipped", "interrupted", "active"],
+            "description": "Only runs in this state. 'active' means queued or running."
+          },
+          "limit": {
+            "type": "number",
+            "description": "How many runs to return, newest first. Default 10, max 50."
+          },
+          "withOutput": {
+            "type": "boolean",
+            "description": "true includes the result text of each run. Default false (summaries only)."
+          }
+        }
+      },
+      "card": {
+        "template": "list",
+        "icon": "History"
+      }
     }
   ],
   "settings": [
@@ -19,8 +251,43 @@
       "key": "notifyOnStart",
       "type": "boolean",
       "label": "任务开始时通知",
-      "description": "关闭后只在执行结束（成功/失败）时发系统通知，执行开始不再打扰。",
+      "description": "关闭后只在执行结束、且符合通知策略时发系统通知，执行开始不再打扰。",
       "default": true
+    },
+    {
+      "key": "notifyPolicy",
+      "type": "select",
+      "label": "默认通知策略",
+      "description": "任务没单独设置时用它。「有变化才通知」适合监控类任务；提醒类任务建议在任务里改成「每次都通知」。",
+      "default": "on-change",
+      "options": [
+        {
+          "value": "on-change",
+          "label": "有变化才通知（失败也通知）"
+        },
+        {
+          "value": "always",
+          "label": "每次都通知"
+        },
+        {
+          "value": "failures",
+          "label": "仅失败时通知"
+        },
+        {
+          "value": "never",
+          "label": "不通知，只看运行记录"
+        }
+      ]
+    },
+    {
+      "key": "taskTimeoutMinutes",
+      "type": "number",
+      "label": "单次执行超时（分钟）",
+      "description": "超过这个时长会中止并记为失败。读文件写简报 15 分钟够用；跑构建可以调大。",
+      "default": 15,
+      "min": 1,
+      "max": 120,
+      "step": 1
     },
     {
       "key": "defaultCwd",
