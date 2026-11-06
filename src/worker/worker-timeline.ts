@@ -234,6 +234,11 @@ export function timelineItemsFromBranchPath(path: unknown[]): Array<Record<strin
       type?: string
       summary?: string
       message?: PiSessionMessage & { content?: unknown[] }
+      /** custom_message entry（插件投递）的字段 */
+      customType?: string
+      content?: unknown
+      display?: boolean
+      details?: unknown
     }
     const ts = e.timestamp ? new Date(e.timestamp).getTime() : now
     const sid = e.id
@@ -258,10 +263,25 @@ export function timelineItemsFromBranchPath(path: unknown[]): Array<Record<strin
       })
       continue
     }
-    if (e.type !== 'message' || !e.message) continue
+    // 插件投递的消息（sessions.send）在盘上是独立 entry 类型 `custom_message`，
+    // 不带 message 字段；只认 'message' 的话，重启后这些回报会从对话流里整条消失
+    // （实时链路走 app event，所以当场看得见、重开就没了）。这里把它还原成
+    // role:'custom' 的消息，走下面同一条加工路径。
+    const m =
+      e.type === 'custom_message'
+        ? ({
+            role: 'custom',
+            customType: e.customType,
+            content: e.content,
+            display: e.display,
+            details: e.details,
+          } as unknown as PiSessionMessage)
+        : e.message
+    if (e.type !== 'message' && e.type !== 'custom_message') continue
+    if (!m) continue
 
-    const m = e.message
-    const content = m.content || []
+    // content 可能是纯字符串（插件投递的消息就是），只有数组才谈得上 toolCall
+    const content = Array.isArray(m.content) ? m.content : []
 
     const pluginText = pluginMessageText(m)
     if (m.role === 'user' || pluginText !== null) {

@@ -1193,8 +1193,12 @@ const tools = {
     if (res.requestedMaxBytes !== res.effectiveMaxBytes) {
       lines.push(`maxBytes ${res.requestedMaxBytes} 已按 ${res.effectiveMaxBytes}B（允许范围 ${MIN_READ_BYTES}B~${fmtBytes(READ_CHUNK_MAX)}）实际执行。`)
     }
-    if (!res.chunk) lines.push(res.running ? '暂时还没有输出。' : '没有输出。')
-    else lines.push('', '```', res.chunk.replace(/\n$/, ''), '```')
+    if (!res.chunk) {
+      // offset 已经走到日志末尾时说「没有输出」，会被读成「这个任务根本没输出」（v7 反馈）
+      const atEnd = res.totalBytes > 0 && res.nextOffset >= res.totalBytes
+      if (atEnd) lines.push(res.running ? '已读到末尾，暂时没有新输出。' : '已读到末尾（没有新内容）。')
+      else lines.push(res.running ? '暂时还没有输出。' : '没有输出。')
+    } else lines.push('', '```', res.chunk.replace(/\n$/, ''), '```')
     if (res.hasMore) lines.push(`还有 ${fmtBytes(res.totalBytes - res.nextOffset)} 未读，下次传 offset=${res.nextOffset}。`)
     if (stream === 'out' && (task.errBytes || 0) > 0) {
       lines.push(`这个任务还有 ${fmtBytes(task.errBytes)} 的 stderr 输出，需要时传 stream:'err' 查看。`)

@@ -99,4 +99,42 @@ describe('时间线归一化', () => {
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ type: 'user-message', text: '【后台任务回报】bg-3 已完成' })
   })
+
+  // 实时链路（{type:'message', message:{role:'custom'}}）与落盘形态不是一回事：
+  // pi 把插件投递的消息写成独立 entry `custom_message`，没有 message 字段。
+  // 只认 'message' 的话，重启后回报会从对话流里整条消失。
+  it('磁盘形态的 custom_message entry 也认（重启后回放看得见）', () => {
+    const items = timelineItemsFromBranchPath([
+      {
+        id: 'e1',
+        type: 'custom_message',
+        customType: PLUGIN_MESSAGE_CUSTOM_TYPE,
+        content: [{ type: 'text', text: '【后台任务回报】bg-3 已完成' }],
+        display: true,
+        details: ORIGIN,
+        timestamp: new Date().toISOString(),
+      },
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      type: 'user-message',
+      text: '【后台任务回报】bg-3 已完成',
+      pluginOrigin: ORIGIN,
+      sessionEntryId: 'e1',
+    })
+  })
+
+  it('磁盘形态的隐藏上下文（display:false）照样不进时间线', () => {
+    const items = timelineItemsFromBranchPath([
+      {
+        id: 'e2',
+        type: 'custom_message',
+        customType: PLUGIN_MESSAGE_CUSTOM_TYPE,
+        content: '你是团队的队长……',
+        display: false,
+        timestamp: new Date().toISOString(),
+      },
+    ])
+    expect(items).toHaveLength(0)
+  })
 })
