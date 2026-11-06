@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipcClient } from '@renderer/lib/ipc-client'
 import { useUIStore } from '@renderer/stores/ui-store'
+import { pluginEntryUrl } from '@shared/plugin-panel-url'
 
 /**
  * 会话条（content 模式）上报高度的上限。会话条是对话流的租客，超过这个高度的
@@ -266,7 +267,7 @@ export function PluginPanelFrame({
         ref={iframeRef}
         className="h-full w-full border-0 bg-transparent"
         title={title ?? `plugin:${pluginId}`}
-        src={`pi-plugin://${pluginId}/${(entry ?? 'ui/index.html').replace(/^\/+/, '')}`}
+        src={pluginEntryUrl(pluginId, entry)}
         sandbox="allow-scripts allow-forms allow-modals"
         onLoad={() => {
           // 兜底：不依赖插件 UI 记得发 hello。load 晚于首屏脚本执行，

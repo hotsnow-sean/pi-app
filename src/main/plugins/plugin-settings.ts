@@ -30,21 +30,34 @@ function settingsFile(pluginId: string): string {
   return path.join(app.getPath('userData'), 'plugin-data', pluginId, 'settings.json')
 }
 
+/**
+ * 读到坏文件时先改名留证再当空处理：设置写回是整份覆盖，不留证据的话用户的配置
+ * 会在下一次保存时被静默抹掉（与 plugin-host 的 data.json 同一套处理）。
+ */
 function readRaw(pluginId: string): Record<string, unknown> {
+  const file = settingsFile(pluginId)
   try {
-    const file = settingsFile(pluginId)
     if (!fs.existsSync(file)) return {}
     const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
-  } catch {
+  } catch (error) {
+    console.warn(`[plugin-settings] ${pluginId}/settings.json unreadable:`, errorMessage(error))
+    try {
+      fs.renameSync(file, `${file}.corrupt-${Date.now()}`)
+    } catch {
+      /* 改名失败不影响读取结果 */
+    }
     return {}
   }
 }
 
+/** 原子写：.tmp → rename，避免崩溃时留下半个 JSON */
 function writeRaw(pluginId: string, data: Record<string, unknown>): void {
   const file = settingsFile(pluginId)
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(data, null, 2))
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
+  fs.renameSync(tmp, file)
 }
 
 /** 只保留 schema 里声明过的键，并按类型强制；非法值回落到默认值，不落盘 */

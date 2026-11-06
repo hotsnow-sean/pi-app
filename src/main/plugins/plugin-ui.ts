@@ -122,9 +122,9 @@ export function cancelPluginUIRequest(id: string): boolean {
 
 /** 插件停用 / 应用退出时，别让挂着的对话框把 promise 卡死 */
 export function cancelPluginUIRequests(pluginId?: string): void {
+  const win = hostWindow()
   for (const [id, waiter] of [...waiters]) {
     if (pluginId !== undefined && waiter.pluginId !== pluginId) continue
-    const win = hostWindow()
     if (win) win.webContents.send('ipc:extension-ui-dismiss', { type: 'extension-ui-dismiss', id, reason: 'cancelled' })
     waiter.resolve(EMPTY_QUESTIONNAIRE)
   }
