@@ -197,4 +197,36 @@ describe('后台任务面板 UI', () => {
     expect(calls.find((c) => c.method === 'clearTasks').params.ids).toEqual(['mine'])
     expect(store.map((t) => t.id)).toEqual(['theirs'])
   })
+
+  it('P3-4：ui 与 main 的 normSession/sameSession 等价（两份实现，一份语义）', async () => {
+    // iframe 里没有 node 模块，这两份实现物理上合不了；但「面板按会话过滤」和
+    // 「托盘按会话归属」必须永远判到一起去，漂了就是「托盘在、面板空」这类鬼病。
+    loadUi()
+    await waitFor(() => window.__sessionMatch, 'app.js 暴露了会话匹配函数')
+    const ui = window.__sessionMatch
+    const main = await import('../lib/format.mjs')
+
+    const cases = [
+      // [a, b, 期望 sameSession]
+      ['/c/w/s-abc.jsonl', '/c/w/s-abc.jsonl', true],
+      ['/c/w/s-abc.jsonl/', '/c/w/s-abc.jsonl', true], // 尾斜杠
+      ['/C/W/S-ABC.JSONL', '/c/w/s-abc.jsonl', true], // 大小写
+      ['c:\\w\\s-abc.jsonl', 'c:/w/s-abc.jsonl', true], // 分隔符
+      ['/other/prefix/s-abc.jsonl', '/c/w/s-abc.jsonl', true], // 前缀不同、basename 同
+      ['/c/w/s-abc.jsonl', '/c/w/s-other.jsonl', false],
+      ['/c/w/s-abc.jsonl', '', false],
+      ['', '', false],
+      [undefined, '/c/w/s-abc.jsonl', false],
+      ['', null, false],
+    ]
+    for (const [a, b, expected] of cases) {
+      expect(ui.sameSession(a, b)).toBe(expected)
+      expect(main.sameSession(a, b)).toBe(expected)
+    }
+
+    const norm = ['/C/W/S-ABC.JSONL/', 'c:\\w\\s-abc.jsonl', '', null, undefined, '  ']
+    for (const p of norm) {
+      expect(ui.normSession(p)).toBe(main.normSession(p))
+    }
+  })
 })

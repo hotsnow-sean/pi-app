@@ -155,7 +155,8 @@ function apply(): void {
   }
 }
 
-export async function handlePluginToolResponse(msg: WorkerIncomingMessage, _reply: WorkerReply): Promise<void> {  const callId = String(msg.callId ?? '')
+export async function handlePluginToolResponse(msg: WorkerIncomingMessage, _reply: WorkerReply): Promise<void> {
+  const callId = String(msg.callId ?? '')
   const p = pending.get(callId)
   if (!p) return
   clearTimeout(p.timer)

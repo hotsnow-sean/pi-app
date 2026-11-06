@@ -2,6 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipcClient } from '@renderer/lib/ipc-client'
 import { useUIStore } from '@renderer/stores/ui-store'
 
+/**
+ * 会话条（content 模式）上报高度的上限。会话条是对话流的租客，超过这个高度的
+ * 内容应该做进右栏面板——宿主截断而不是把对话流顶开。契约见 plugin-host-api.md
+ * 「plugin-content-height」一条；改这里必须同步改文档。
+ */
+const MAX_CONTENT_HEIGHT = 400
+
 export type PluginPanelFrameProps = {
   pluginId: string
   /** 完整 panel/view id（plugin:<pluginId>:<id>），透传给插件 UI */
@@ -159,7 +166,7 @@ export function PluginPanelFrame({
         // content 模式：插件自己量高度后上报。0 表示「这里没我事」——
         // 容器塌缩成 0 但 iframe 不卸载，否则插件再也没机会把它撑开。
         const h = Number(data.height)
-        setContentHeight(Number.isFinite(h) && h >= 0 ? Math.min(400, Math.round(h)) : null)
+        setContentHeight(Number.isFinite(h) && h >= 0 ? Math.min(MAX_CONTENT_HEIGHT, Math.round(h)) : null)
         return
       }
       if (data.type === 'plugin-open-panel') {

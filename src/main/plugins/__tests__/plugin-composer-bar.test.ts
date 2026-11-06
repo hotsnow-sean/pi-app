@@ -9,6 +9,9 @@ vi.mock('electron', () => ({
 
 vi.mock('../../ipc/registry', () => ({
   sendEvent: (...args: unknown[]) => sendEvent(...args),
+  // electron mock 的 getAllWindows 只有一个假窗口；广播 = 逐窗口 sendEvent，
+  // 与真实 broadcastEvent 行为等价（断言只看 sendEvent 的调用次数与内容）
+  broadcastEvent: (event: unknown) => sendEvent({ isDestroyed: () => false }, event as never),
 }))
 
 import { clearPluginComposerBars, listPluginComposerBars, publishPluginComposerBar } from '../plugin-composer-bar'

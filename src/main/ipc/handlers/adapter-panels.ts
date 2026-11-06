@@ -1,5 +1,4 @@
-import { registerHandler, sendEvent } from '../registry'
-import { BrowserWindow } from 'electron'
+import { broadcastEvent, registerHandler } from '../registry'
 import { awaitWslVm } from '../../wsl/wsl-env'
 import { workerManager } from '../../worker-manager'
 import { configStore } from '../../config-store'
@@ -17,7 +16,7 @@ import {
 
 export function registerAdapterPanelHandlers(): void {
   onAdapterCatalogChanged((catalog, workspaceId) => {
-    for (const window of BrowserWindow.getAllWindows()) sendEvent(window, { type: 'adapter-catalog-changed', workspaceId, revision: catalog.revision })
+    broadcastEvent({ type: 'adapter-catalog-changed', workspaceId, revision: catalog.revision })
     void workerManager.refreshAdapters(workspaceId, catalog).catch((error) => console.warn('[adapter-catalog] worker refresh failed:', error))
   })
   registerHandler('ipc:adapter.config.get', async (req) => {

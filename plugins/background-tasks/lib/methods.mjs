@@ -182,7 +182,11 @@ export const methods = {
     // 记录删完后再扫一遍目录：句柄已释放的残留（v8 报告 §八.2 的「惰性删除」）
     // 与任何历史孤儿都会在这里被收走，不必等用户再点一次清理
     sweepOrphanFiles()
-    for (const task of victims) pushBarForTask(task)
+    // 托盘按会话聚合推送：清 5 条同会话任务 = 1 次推送（逐条推是 5 次全窗口
+    // 广播 + 5 次面板重算，结果完全一样——托盘本来就是一个会话一条）
+    for (const sf of new Set(victims.map((t) => t.sessionFile).filter(Boolean))) {
+      pushComposerBar(sf)
+    }
     // missing 只算真正不存在的 id：运行中被 keepRunning 挡下的任务存在且活着，
     // 把它报成「id 不存在」会让人以为记错了 id（v6 实测踩过）
     const missing = wantedIds.filter(

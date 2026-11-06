@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, shell } from 'electron'
-import { registerHandler, sendEvent } from '../ipc/registry'
+import { broadcastEvent, registerHandler } from '../ipc/registry'
 import { discoverPlugins, installPluginFromDir, removeUserPlugin } from './plugin-manager'
 import { activateEnabledPlugins, activatePlugin, applyPluginEnabled, deactivatePlugin, invokePlugin } from './plugin-host'
 import { listPluginComposerBars } from './plugin-composer-bar'
@@ -41,9 +41,7 @@ export function pluginAdapterPanels(plugins: ReturnType<typeof discoverPlugins>)
 
 /** 启停/安装/卸载后刷新 renderer 的插件目录与右栏 */
 function broadcastCatalogChanged(): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    sendEvent(win, { type: 'adapter-catalog-changed', revision: String(Date.now()) })
-  }
+  broadcastEvent({ type: 'adapter-catalog-changed', revision: String(Date.now()) })
 }
 
 export function registerPluginHandlers(): void {

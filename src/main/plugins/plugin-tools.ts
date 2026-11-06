@@ -1,4 +1,4 @@
-import { discoverPlugins } from './plugin-manager'
+import { discoverPlugins, pluginDiscoveryVersion } from './plugin-manager'
 import { invokePlugin } from './plugin-host'
 import { errorMessage } from '@shared/error-message'
 import type { PluginToolDescriptor, PluginToolResult } from '@shared/plugin-manifest'
@@ -28,8 +28,15 @@ type ToolResultPayload = Omit<PluginToolResult, 'text'> & {
 /** callId → 取消句柄：worker 侧 abort/超时会发 plugin-tool-cancel */
 const running = new Map<string, { pluginId: string; controller: AbortController }>()
 
+// 描述符缓存（P2-8）：每轮 prompt 都要重发一遍全部工具 schema（含 parameters），
+// 不缓存的话每次都在对话主链路上做全盘扫描 + JSON 解析。挂在插件发现代数上失效——
+// 安装/卸载/manifest 变化都会让 plugin-manager 的目录缓存重建、version +1。
+let descriptorCache: { version: number; descriptors: PluginToolDescriptor[] } | null = null
+
 /** 所有启用插件声明的工具（同名先到先得，重复的跳过并记日志） */
 export function pluginToolDescriptors(): PluginToolDescriptor[] {
+  const version = pluginDiscoveryVersion()
+  if (descriptorCache && descriptorCache.version === version) return descriptorCache.descriptors
   const out: PluginToolDescriptor[] = []
   const seen = new Set<string>()
   for (const plugin of discoverPlugins()) {
@@ -49,6 +56,7 @@ export function pluginToolDescriptors(): PluginToolDescriptor[] {
       })
     }
   }
+  descriptorCache = { version, descriptors: out }
   return out
 }
 

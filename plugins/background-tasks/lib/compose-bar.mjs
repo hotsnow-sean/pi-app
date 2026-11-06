@@ -22,11 +22,13 @@ import { join as joinPath } from 'node:path'
 // jsdom 测试环境会给 URL 构造器打补丁，相对解析会落到 document.baseURI 上
 const Q = import.meta.url.includes('?') ? `?${import.meta.url.split('?')[1]}` : ''
 const imp = (name) => import(pathToFileURL(joinPath(import.meta.dirname, `${name}.mjs`)).href + Q)
-const { rt, PLUGIN_ID } = await imp('runtime')
+const { rt, pluginId } = await imp('runtime')
 const { fmtDuration, sameSession } = await imp('format')
 
-/** 右栏面板的完整 id（宿主 catalog 里的形式） */
-const PANEL_ID = `plugin:${PLUGIN_ID}:tasks`
+/** 右栏面板的完整 id（宿主 catalog 里的形式）。
+ *  推送时现算而不是模块加载时定死：模块加载早于 activate，ctx 还没进来；
+ *  id 以宿主给的 ctx.pluginId 为准，manifest 改 id 不会在这里失配。 */
+const panelId = () => `plugin:${pluginId()}:tasks`
 /** 托盘里最多列几条：再多就该去右栏看，而不是把输入框顶上去 */
 const BAR_MAX_ROWS = 8
 
@@ -79,7 +81,7 @@ export function composerBarFor(sessionFile) {
         ? { startedAt: t.startedAt, actions: [{ id: 'stop', icon: 'stop', title: '停止' }] }
         : { meta: barMeta(t) }),
     })),
-    panelId: PANEL_ID,
+    panelId: panelId(),
   }
 }
 

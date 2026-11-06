@@ -16,7 +16,13 @@ export const SETTING_DEFAULTS = {
   maxLogMb: 50,
 }
 
+/** 兜底 id：仅供测试夹具（ctx 不带 pluginId）与激活前的极早窗口使用。
+ *  运行期一律取宿主给的 ctx.pluginId —— manifest 里的 id 改了这里不该跟着改，
+ *  否则「改了 manifest 里的 id，托盘点击静默打不开面板」这类失配就会回来。 */
 export const PLUGIN_ID = 'background-tasks'
+
+/** 本插件在宿主里的真实 id：激活后以 ctx.pluginId 为准 */
+export const pluginId = () => rt.ctx?.pluginId || PLUGIN_ID
 
 export const rt = {
   /** @type {import('../../plugin-sdk').PluginContext | null} 激活时由 main 写入 */

@@ -6,6 +6,7 @@ import {
   parsePluginManifest,
   type PluginManifest,
 } from '@shared/plugin-manifest'
+import { satisfiesHostRange } from '@shared/semver-range'
 import { errorMessage } from '@shared/error-message'
 
 /**
@@ -54,50 +55,105 @@ function pluginRoots(): PluginRoot[] {
   return roots
 }
 
-function readManifest(dir: string): Omit<DiscoveredPlugin, 'source'> {
+function readManifest(dir: string): Omit<DiscoveredPlugin, 'source' | 'enabled'> {
   const manifestPath = path.join(dir, 'plugin.json')
   try {
     if (!fs.existsSync(manifestPath)) {
-      return { manifest: null as unknown as PluginManifest, dir, enabled: false, error: 'plugin.json not found' }
+      return { manifest: null as unknown as PluginManifest, dir, error: 'plugin.json not found' }
     }
     const raw: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
     const parsed = parsePluginManifest(raw)
     if (!parsed.ok) {
-      return { manifest: null as unknown as PluginManifest, dir, enabled: false, error: parsed.error }
+      return { manifest: null as unknown as PluginManifest, dir, error: parsed.error }
     }
-    const enabled = configStore.get('pluginEnabled')[parsed.manifest.id] !== false
-    return { manifest: parsed.manifest, dir, enabled }
+    // engines 校验（P2-7）：声明了「需要 host ≥ x」就要真的有人管，
+    // 否则这个字段只是作者的自我安慰。不满足 = 不可激活，进设置页的诊断信息。
+    const required = parsed.manifest.engines?.['pi-desktop']
+    if (required && !satisfiesHostRange(app.getVersion(), required)) {
+      return {
+        manifest: null as unknown as PluginManifest,
+        dir,
+        error: `host version ${app.getVersion()} does not satisfy engines['pi-desktop'] = ${required}`,
+      }
+    }
+    return { manifest: parsed.manifest, dir }
   } catch (error) {
     return {
       manifest: null as unknown as PluginManifest,
       dir,
-      enabled: false,
       error: error instanceof Error ? error.message : String(error),
     }
   }
 }
 
-export function discoverPlugins(): DiscoveredPlugin[] {
-  const out: DiscoveredPlugin[] = []
-  const seen = new Set<string>()
+// ---------- 目录缓存（P2-8） ----------
+//
+// discoverPlugins 的调用点在热路径上：每轮 prompt.send、每次 ctx.sessions.send、
+// 每次设置读写都要全盘 readdir + readFileSync + JSON.parse + zod parse。缓存以
+// 「各插件根目录的 mtime」为失效键——安装/卸载/升级都会改动根目录 mtime，天然失效；
+// setPluginEnabled 只动 configStore，不动目录，所以 enabled 每次现算、不进缓存。
+//
+// 已知边界：直接改某个插件目录内部的 plugin.json 不会改根目录 mtime，缓存不失效。
+// 开发期改 manifest 请重启应用（改代码走的是 mtime 热重载，与这条无关）。
+
+type CacheEntry = {
+  /** 缓存键：各根目录的 `dir\0mtimeMs` 串 */
+  key: string
+  /** 不含 enabled 的目录结果（enabled 现算） */
+  plugins: Array<Omit<DiscoveredPlugin, 'enabled'>>
+  /** 每次重建 +1：派生结果（工具描述符等）用它做缓存键 */
+  version: number
+}
+
+let cache: CacheEntry | null = null
+
+/** 当前发现代数：pluginToolDescriptors 等派生结果用它做自己的缓存键 */
+export function pluginDiscoveryVersion(): number {
+  return cache?.version ?? 0
+}
+
+function discoveryKey(): string | null {
+  const parts: string[] = []
   for (const root of pluginRoots()) {
-    let entries: fs.Dirent[]
     try {
-      entries = fs.readdirSync(root.dir, { withFileTypes: true })
+      parts.push(`${root.dir}\u0000${root.source}\u0000${fs.statSync(root.dir).mtimeMs}`)
     } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const dir = path.join(root.dir, entry.name)
-      const plugin = readManifest(dir)
-      // 同 id 先到先得（内置优先于 userData）
-      if (plugin.manifest && seen.has(plugin.manifest.id)) continue
-      if (plugin.manifest) seen.add(plugin.manifest.id)
-      out.push({ ...plugin, source: root.source })
+      // 根目录不存在（如 userData/plugins 还没建过）：也算一种稳定状态
+      parts.push(`${root.dir}\u0000${root.source}\u0000missing`)
     }
   }
-  return out
+  return parts.join('\u0001')
+}
+
+export function discoverPlugins(): DiscoveredPlugin[] {
+  const key = discoveryKey()
+  if (key === null) return []
+  if (!cache || cache.key !== key) {
+    const out: Array<Omit<DiscoveredPlugin, 'enabled'>> = []
+    const seen = new Set<string>()
+    for (const root of pluginRoots()) {
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(root.dir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const dir = path.join(root.dir, entry.name)
+        const plugin = readManifest(dir)
+        // 同 id 先到先得（内置优先于 userData）
+        if (plugin.manifest && seen.has(plugin.manifest.id)) continue
+        if (plugin.manifest) seen.add(plugin.manifest.id)
+        out.push({ ...plugin, source: root.source })
+      }
+    }
+    cache = { key, plugins: out, version: (cache?.version ?? 0) + 1 }
+  }
+  return cache.plugins.map((p) => ({
+    ...p,
+    enabled: p.manifest ? configStore.get('pluginEnabled')[p.manifest.id] !== false : false,
+  }))
 }
 
 export function findPlugin(pluginId: string): DiscoveredPlugin | null {
@@ -107,6 +163,9 @@ export function findPlugin(pluginId: string): DiscoveredPlugin | null {
 export function setPluginEnabled(pluginId: string, enabled: boolean): void {
   const next = { ...configStore.get('pluginEnabled'), [pluginId]: enabled }
   configStore.set('pluginEnabled', next)
+  // enabled 不进目录缓存（现算），但派生结果（工具描述符等）依赖它——
+  // 启停后抬一代，让它们失效
+  if (cache) cache.version += 1
 }
 
 // ---------- 安装 / 卸载 ----------

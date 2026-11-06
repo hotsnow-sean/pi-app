@@ -1,4 +1,4 @@
-import { ipcMain, type BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import type { AppEvent } from '@shared/app-events'
 import { z, type ZodSchema } from 'zod'
 
@@ -78,4 +78,10 @@ export function sendEvent(win: BrowserWindow, event: AppEvent): void {
   if (!win.isDestroyed()) {
     win.webContents.send('ipc:events', event)
   }
+}
+
+/** 广播给所有存活窗口。广播循环此前散在三处，收敛到 sendEvent 旁边——
+ *  「哪些事件该全窗口广播」是事件语义的一部分，不该和「怎么发」分家。 */
+export function broadcastEvent(event: AppEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) sendEvent(win, event)
 }
