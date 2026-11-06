@@ -1757,11 +1757,28 @@
     border-left: 2px solid color-mix(in srgb, var(--brand) 75%, transparent);
     border-radius: 2px 10px 10px 10px;
   }
+  /* 头部一行：徽标 + 折叠提示 + chevron。整行可点（短回报不可点，光标撤掉） */
+  .timeline-plugin-head {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .timeline-plugin-head[data-foldable='false'] {
+    cursor: default;
+  }
   .timeline-plugin-badge {
     display: flex;
     align-items: baseline;
     gap: 0.375rem;
-    margin-bottom: 0.125rem;
+    min-width: 0;
     font-size: 12px;
     line-height: 1.4;
   }
@@ -1775,6 +1792,43 @@
     background: color-mix(in srgb, var(--brand) 14%, transparent);
     color: var(--text-secondary);
     font-size: 11px;
+  }
+  /* 回报涉及的任务 id（origin.detail）：折叠态一眼看出是哪批任务 */
+  .timeline-plugin-badge-detail {
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    opacity: 0.7;
+  }
+  .timeline-plugin-fold-hint {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 11px;
+    white-space: nowrap;
+    opacity: 0.75;
+  }
+  .timeline-plugin-head[data-foldable='true']:hover .timeline-plugin-fold-hint {
+    color: var(--text-primary);
+    opacity: 1;
+  }
+  /* 折叠态：只留正文第一句，单行截断，别把徽标挤掉 */
+  .timeline-plugin-summary {
+    margin-top: 0.125rem;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.65;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .timeline-plugin-body {
+    margin-top: 0.1875rem;
+    max-height: 16rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .timeline-plugin-text {
     font-size: 14px;

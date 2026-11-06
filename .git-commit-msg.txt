@@ -1,0 +1,11 @@
+feat(timeline): 插件回报转述行可折叠 + 围栏渲染成代码块
+
+一条回报最多 3 个任务 × 20 行 tail，全铺开占掉大半屏。折叠只能做在渲染层
+（content 是模型与界面共用的同一份文本，插件压缩等于让模型也少看输出）。
+
+- 新增 PluginMessageNote：头部常驻（徽标 + kind + origin.detail 任务 id +
+  折叠提示），正文 > 6 行或 > 400 字才折，折叠态显示正文第一句
+- 展开态 max-h-16rem + data-independent-scroll，本地 useState 记忆，不进 store
+- splitMessageBlocks() 按围栏切散文/代码，代码走 CodeBlockView（此前裸围栏）
+- 顺手修 i18n：kind 文案缺 timeline 前缀，实际渲染成裸键名 pluginMessage.kindReport
+- plugin-message-note.test.tsx 6 条
