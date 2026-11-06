@@ -88,7 +88,7 @@ export function notifySkipReason(info) {
 /**
  * 输出协议：
  * - `SCHED:changed` / `SCHED:unchanged`：结果有没有变化；
- * - `SCHED:failed[: 原因]`：本次任务整体失败（脚本退出码非 0、结论就是「没做成」）。
+ * - `SCHED:failed[: 原因]`：本次任务**整体**没做成（关键命令退出码非 0、页面没打开、数据没取到）。
  *
  * 「失败」必须由 agent 自报：插件的 ok 只代表**会话**跑完了，不代表任务目标达成。
  * 自动拿退出码判失败会大面积误报——agent 探索时敲错一条命令是常态。
@@ -160,7 +160,9 @@ export function buildPrompt(task, runId) {
   )
   lines.push('- 如果有变化，或者这是首次执行：最后一行写 `SCHED:changed`。')
   lines.push(
-    '- 如果这次任务整体算失败（例如要跑的命令退出码非 0、窗口没打开、数据没取到）：最后一行写 `SCHED:failed: 一句话原因`，代替上面两个标记。',
+    '- 只有**整个任务没做成**才算失败：关键命令退出码非 0、窗口/页面没打开、数据没取到。' +
+      '辅助命令（grep / ls / test 之类）非 0 是正常探索，不要因此判失败。' +
+      '判失败时最后一行写 `SCHED:failed: 一句话原因`，代替上面两个标记。',
   )
   lines.push(
     `- 可选（更可靠）：把一句话摘要写成 JSON 文件 \`${signal}\`，内容形如 {"changed":true,"summary":"一句话结论"}。写完仍然要用一句话回复结论，但不要再调用任何工具。`,
