@@ -112,6 +112,11 @@ export function createWindow(closeToTray = false): BrowserWindow {
     }
   })
 
+  // 任务栏闪烁由「有交互请求等你回答」触发（见 plugins/plugin-ui.ts），回到窗口就停。
+  mainWindow.on('focus', () => {
+    mainWindow?.flashFrame(false)
+  })
+
   // Production: skip per-line renderer console forwarding (idle/poll noise).
   // Dev and e2e keep full forwarding for diagnostics.
   if (is.dev || isE2eTestMode()) {

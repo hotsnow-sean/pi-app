@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import {
   EMPTY_QUESTIONNAIRE,
@@ -7,6 +7,7 @@ import {
   type PluginUIQuestionnaireResult,
   type PluginUIResponse,
 } from '@shared/plugin-ui'
+import { getMainWindow } from '../window'
 
 /**
  * 插件 → 宿主的界面请求（main 侧）。
@@ -26,11 +27,24 @@ type Waiter = {
 
 const waiters = new Map<string, Waiter>()
 
+/**
+ * 问卷只能由**主窗口**的渲染端承载：`ipc:extension-ui-request` 的监听器只装在主窗口
+ * （通知卡窗口用的是另一个 preload，收到也画不出来）。
+ *
+ * 旧实现是「有焦点就用焦点窗口，否则用 getAllWindows()[0]」，两条都错：
+ * ① 焦点可能落在别的窗口上；② `getAllWindows()` 的顺序不保证是创建顺序——实测新建窗口
+ * 会排到 0 号位，于是只要通知卡窗口存在过（它 hide 但不销毁），请求就被发进那个隐藏窗口，
+ * 没有监听者、没有回答，ask_user 一直挂到超时。用户看到的「应用不在前台提问必卡」即此。
+ */
 function hostWindow(): BrowserWindow | null {
-  const focused = BrowserWindow.getFocusedWindow()
-  if (focused && !focused.isDestroyed()) return focused
-  const any = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
-  return any ?? null
+  return getMainWindow()
+}
+
+/** 让问卷真正能被看见：从最小化/托盘恢复，但不抢焦点，只用任务栏闪烁提示 */
+function presentHostWindow(win: BrowserWindow): void {
+  if (win.isMinimized()) win.restore()
+  if (!win.isVisible()) win.show()
+  if (!win.isFocused()) win.flashFrame(true)
 }
 
 /** 弹一次问卷，等用户作答。没有窗口 / 被取消 / 超时都返回 cancelled 结果，绝不抛 */
@@ -69,6 +83,7 @@ export function askInHost(
     }
     opts?.signal?.addEventListener('abort', onAbort, { once: true })
     waiters.set(id, { pluginId, resolve: finish })
+    presentHostWindow(win)
     win.webContents.send('ipc:extension-ui-request', {
       id,
       method: 'custom',
