@@ -415,6 +415,48 @@ describe('report queue vs explicit actions', () => {
     }
   })
 
+  it('skips running tasks when clearing by ids unless keepRunning is false', async () => {
+    // v5 实测：ids 路径曾无视 keepRunning 默认值，误传一个 id 就静默杀掉长任务
+    const running = await start({ command: 'sleep 30', label: '点名保留' })
+    const finished = await start({ command: 'echo done', label: '点名清理' })
+    await waitDone(finished.details.id)
+
+    const cleared = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { ids: [running.details.id, finished.details.id] },
+      sessionFile: 's1.jsonl',
+    })
+    expect(cleared.details.ids).toEqual([finished.details.id])
+    expect(cleared.details.skippedRunning).toBe(1)
+    expect(cleared.text).toContain('运行中任务已跳过')
+    // 上面是跳过不是强杀：进程必须还活着
+    expect(() => process.kill(running.details.pid, 0)).not.toThrow()
+
+    // 显式 keepRunning:false 才是「连任务一起清」
+    const forced = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { ids: running.details.id, keepRunning: false },
+      sessionFile: 's1.jsonl',
+    })
+    expect(forced.details.ids).toEqual([running.details.id])
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } }).catch(() => {})
+  }, 60_000)
+
+  it('explains skipped running tasks when clearing by status running', async () => {
+    // v5 实测：明明有 3 个运行中任务，文案却说「没有 running 任务可清理」——排障陷阱
+    const running = await start({ command: 'sleep 30', label: '状态路径' })
+    const res = await handle.invoke('tool.execute', {
+      name: 'bg_clear',
+      args: { status: 'running' },
+      sessionFile: 's1.jsonl',
+    })
+    expect(res.details.cleared).toBe(0)
+    expect(res.details.skippedRunning).toBeGreaterThanOrEqual(1)
+    expect(res.text).toContain('运行中任务已跳过')
+    expect(res.text).not.toContain('没有状态为 running 的任务')
+    await handle.invoke('tool.execute', { name: 'bg_stop', args: { id: running.details.id, waitMs: 8_000 } })
+  }, 60_000)
+
   it('never reports a task cleared while it was still stopping', async () => {
     // 真实竞态：bg_clear({keepRunning:false}) 要先等进程退出（最长 3s），
     // 这段窗口里 exit 回调会去入队——队列若在清完之后才 flush，就是一条孤儿回报。
@@ -456,5 +498,26 @@ describe('structured output', () => {
     expect(out.details.requestedMaxBytes).toBe(10)
     expect(out.details.effectiveMaxBytes).toBe(64)
     expect(out.text).toContain('已按 64B')
+  }, 60_000)
+
+  it('returns exactly N lines for tailLines N, including 1', async () => {
+    // v5 实测：日志每行带 \n，split 出的末尾空串占了一个名额——
+    // tailLines 稳定少一行，传 1 直接拿到空串。这是读日志最常用的参数，钉死。
+    const res = await start({ command: 'for i in $(seq 1 120); do echo "line $i"; done' })
+    const task = await waitDone(res.details.id)
+    for (const [want, firstLine] of [[1, 'line 120'], [2, 'line 119'], [5, 'line 116']]) {
+      const out = await handle.invoke('tool.execute', {
+        name: 'bg_output',
+        args: { id: task.id, tailLines: want, format: 'json' },
+        sessionFile: 's1.jsonl',
+      })
+      const lines = out.details.chunk.split('\n')
+      expect(lines.length, `tailLines=${want}`).toBe(want)
+      expect(lines[0], `tailLines=${want}`).toBe(firstLine)
+      expect(lines.at(-1), `tailLines=${want}`).toBe('line 120')
+      // chunkBytes 必须是实际返回文本的大小，不是整个日志的大小
+      expect(out.details.chunkBytes, `tailLines=${want}`).toBe(Buffer.byteLength(out.details.chunk, 'utf8'))
+      expect(out.details.chunkBytes, `tailLines=${want}`).toBeLessThan(out.details.totalBytes)
+    }
   }, 60_000)
 })

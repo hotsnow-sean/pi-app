@@ -676,3 +676,44 @@ v4 报告 §三#3：API 层无法按 id 清理，脚本场景不便。`bg_clear(
 - `worker-session-events.test.ts` +1：实时事件透传 `pluginOrigin`。
 - `apply-app-event-message.test.ts`（新）3 条：带 origin 直接入列、不吞用户草稿、
   普通事件仍走乐观行合并。
+
+## 16. v0.5.1：v5 报告的两个 P1
+
+v5 实测（bg-37 ~ bg-43）确认 queued/ids 落地后，抓到两个「参数边界」问题：
+
+### 16.1 `tailLines` off-by-one
+
+日志每行以 `\n` 结尾，`split('\n')` 后末尾多一个空串——tail 取「末 N 个元素」时空串
+占掉一个名额：稳定少一行，`tailLines:1` 直接拿到空串（「没有输出。」）。修法是先摘掉
+末尾空串再取行。同时修掉附带发现：tail 截取后 `chunkBytes` 仍是整段切片的大小
+（按它做进度/校验会拿到整个日志的字节数），现在跟随实际返回文本重算。
+
+### 16.2 `bg_clear({ids})` 无视 `keepRunning`
+
+v0.5.0 引入 ids 时把「点名 = 明确意图」推得太远：运行中任务也被直接 stop+delete，
+一次误传 id 就静默杀掉长任务，与 `keepRunning` 默认语义矛盾。现在 ids 与 status
+两条路径都遵守 `keepRunning`：默认跳过运行中任务并回 `skippedRunning` 计数，
+`keepRunning:false` 才停+删。顺带修文案陷阱：`bg_clear({status:'running'})` 曾回
+「没有状态为 running 的任务可清理」，与事实不符（实情是 keepRunning 把它们跳过了），
+现在如实说「N 个运行中任务已跳过（keepRunning=true）…」。
+
+### 16.3 投递节奏写进工具描述
+
+实测观察「约每回合 1 条」的真相，把投递模型写准（这些已写进 `bg_start` 描述）：
+
+- 回报的宿主投递调用**不带 `deliverAs`**（忙闲只留痕、不参与投递决策），
+  worker 侧语义是：**会话空闲 → 立即开新轮送达；回合进行中 → `followUp` 排队，
+  在下一轮边界送达**。它刻意**不是 steer（插话）**——steer 会在工具调用边界把消息
+  注入正在跑的回合，让模型在执行用户任务的半路上分心处理回报，语境也被打断；
+  排队到轮边界对「结果接入对话」这个目标足够及时。
+- `queued` 只代表「已交给宿主」，送达时机取决于会话忙闲——空闲时当轮即达，
+  忙时排到下一轮，多条 followUp 会在同一个边界一起进来（不是每回合限 1 条）。
+- **批量**：同会话 5s 合并窗口（`MERGE_WINDOW_MS`）内连续结束的任务合成一条回报，
+  一条最多详列 3 条（`MAX_DETAILED_REPORTS`），其余以计数提及。
+
+避免 `queued` 被误读为「已通知」或「丢失」。
+
+### 16.4 测试
+
+`main.test.mjs` 25 → 28 条：`tailLines ∈ {1,2,5}` 精确行数 + `chunkBytes` 语义、
+ids 跳过运行中（进程存活断言）+ `keepRunning:false` 强清对照、status:'running' 文案。

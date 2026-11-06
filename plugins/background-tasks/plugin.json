@@ -1,7 +1,7 @@
 {
   "id": "background-tasks",
   "name": "后台任务",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "长命令放后台跑：起进程、随时看输出、跑完自动把结果回报到发起它的会话。",
   "icon": "Timer",
   "main": "main.mjs",
@@ -27,7 +27,7 @@
     {
       "name": "bg_start",
       "label": "启动后台任务",
-      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Shell defaults to the same one the bash tool uses (Git Bash on Windows); pass shell:'cmd' only when the command is genuinely cmd syntax. The result tells you whether the task will report back.",
+      "description": "Run a shell command in the background and return immediately. Use it for anything slow (builds, installs, test suites, long scans, servers, polling loops) so the conversation is not blocked waiting. The task keeps running when this turn ends, and when it finishes the host will deliver its result back into this same conversation by itself — you do not need to poll or wait. Prefer this over the regular bash tool for anything that may take more than ~10 seconds. Shell defaults to the same one the bash tool uses (Git Bash on Windows); pass shell:'cmd' only when the command is genuinely cmd syntax. The result tells you whether the task will report back. Reports are delivered between turns, not mid-turn: if the conversation is idle the host starts a turn for it; if a turn is running the report queues (report:'queued') and arrives at the next turn boundary. Several tasks finishing within a few seconds are merged into one report.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -206,7 +206,7 @@
     {
       "name": "bg_clear",
       "label": "清理后台任务记录",
-      "description": "Delete finished task records (and their log files) from the list. Running tasks are kept by default — clearing is for tidying up, not for stopping work. Use it when the list has grown long and the user asks to clean it up. Pass ids (string or array) to clear specific tasks regardless of status; unknown ids are reported back as 'missing' instead of failing. Without ids, status filters which finished tasks are cleared.",
+      "description": "Delete finished task records (and their log files) from the list. Running tasks are kept by default — clearing is for tidying up, not for stopping work; tasks skipped this way are reported back. Pass ids (string or array) to clear specific tasks; unknown ids are reported back as 'missing' instead of failing. Without ids, status filters which finished tasks are cleared. Set keepRunning:false to also stop and delete running tasks.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -240,7 +240,7 @@
           },
           "keepRunning": {
             "type": "boolean",
-            "description": "Default true. Set false to also delete running tasks — it stops them first. Only do this when the user explicitly wants everything gone."
+            "description": "Default true: running tasks are skipped (and reported) whether you clear by ids or by status. Set false to also stop and delete running tasks. Only do this when the user explicitly wants everything gone."
           },
           "ids": {
             "anyOf": [
@@ -254,7 +254,7 @@
                 "type": "string"
               }
             ],
-            "description": "Clear these task ids exactly (e.g. [\"bg-12\",\"bg-14\"]); a single string is also accepted. Takes precedence over status. Unknown ids come back as 'missing' in the result."
+            "description": "Clear these task ids exactly (e.g. [\"bg-12\",\"bg-14\"]); a single string is also accepted. Takes precedence over status. Running tasks are still skipped unless keepRunning:false. Unknown ids come back as 'missing' in the result."
           }
         }
       },
