@@ -84,6 +84,60 @@ describe('插件类型契约', () => {
     )
   })
 
+  it('插件自己的 lib/*.mjs 也都开了 // @ts-check 且被 tsconfig 覆盖', () => {
+    const libFiles = []
+    for (const id of pluginIds()) {
+      const dir = join(pluginsDir, id, 'lib')
+      if (!existsSync(dir)) continue
+      for (const name of readdirSync(dir)) {
+        if (name.endsWith('.mjs')) libFiles.push(`${id}/lib/${name}`)
+      }
+    }
+    const tsconfig = JSON.parse(read('plugins/tsconfig.json'))
+    const include = tsconfig.include ?? []
+    for (const file of libFiles) {
+      const head = readFileSync(join(pluginsDir, file), 'utf8').replace(/^\uFEFF/, '').split('\n').slice(0, 5).join('\n')
+      assert.ok(
+        head.includes('// @ts-check'),
+        `${file} 没开类型检查（checkJs=false，不加 pragma 等于不检查）`,
+      )
+    }
+    if (libFiles.length > 0) {
+      assert.ok(
+        include.includes('*/lib/*.mjs'),
+        '有插件拆了 lib/，tsconfig 的 include 必须覆盖 */lib/*.mjs',
+      )
+    }
+  })
+
+  it('插件模块内部没有指向插件文件的静态 import（热重载要求全部走 imp()）', () => {
+    // 静态 import 解析相对路径时会丢掉 ?v=：入口被 bust 重新执行，它引到的插件内
+    // 文件却命中缓存——新旧两代模块同进程并存，是比完全旧更难查的错。所以插件内
+    // 模块引用一律走带 ?v= 的动态导入（见 background-tasks/main.mjs 顶部注释）。
+    const files = []
+    for (const id of pluginIds()) {
+      files.push(`${id}/main.mjs`)
+      const dir = join(pluginsDir, id, 'lib')
+      if (existsSync(dir)) {
+        for (const name of readdirSync(dir)) {
+          if (name.endsWith('.mjs')) files.push(`${id}/lib/${name}`)
+        }
+      }
+    }
+    for (const rel of files) {
+      const src = readFileSync(join(pluginsDir, rel), 'utf8').replace(/^\uFEFF/, '')
+      const offenders = [...src.matchAll(/^\s*(?:import|export)\b[^;'"\n]*['"](\.\.?\/[^'"]+)['"]/gm)]
+        .map((m) => m[1])
+        .filter((spec) => !spec.endsWith('.d.ts'))
+      assert.deepEqual(
+        offenders,
+        [],
+        `${rel} 里出现了插件内静态 import（${offenders.join(', ')}）。` +
+          '插件内模块必须走 imp() 动态加载并透传 ?v=，否则热重载会拿到旧模块。',
+      )
+    }
+  })
+
   it('插件 tsconfig 的 include 覆盖了所有入口', () => {
     const tsconfig = JSON.parse(read('plugins/tsconfig.json'))
     const include = tsconfig.include ?? []

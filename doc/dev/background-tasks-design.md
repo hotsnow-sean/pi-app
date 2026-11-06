@@ -1129,3 +1129,60 @@ row.action?: 'stop'
   （证明宿主不再持有 `stop` 这个动词）。
 - 插件侧 bar 用例改按新词表断言（`tone:'active'` / `row.state` / `row.actions`）。
 - 插件版本 → **v0.7.0**（托盘载荷是破坏性变更，内置插件与宿主同步发）。
+
+## 26. main.mjs 拆模块（审查 3.1）：1732 行 → 薄入口 + 10 个 lib
+
+审查报告（`review-plugin-host-2026-11-06.md` §3.1）指出 main.mjs 七种职责挤一个文件。
+拆分原则：**只搬家，不重写**——函数体逐字搬移，保持 diff 可审；行为零变化，
+测试接口不变（`main.test.mjs` 仍然只 import `./main.mjs`）。
+
+### 26.1 分层（依赖无环）
+
+```
+runtime（共享可变状态：ctx/settings/state/logDir/scriptDir，仅此五个字段值得跨模块）
+├─ format（纯函数：时长/字节/会话归一化/状态文案）        ← 底层，谁也不依赖
+├─ log-io（增量读/tail/行数）                            ← 纯 fs，只认 task 上的路径字段
+├─ shell（findBash/bash 语法哨兵/启动参数拼装）
+├─ files（删除重试/孤儿扫尾；闭包持有 pendingDeletes/sweepTimer）
+├─ store（load/save/pruneTasks；唯一碰 storage 的地方）
+├─ compose-bar（托盘构造与推送）
+├─ report（回报队列；闭包持有 reportQueues/deletedIds）
+├─ tasks（生命周期；闭包持有 children/timeouts/probeTimer）
+├─ tools（模型侧 bg_* + describeStart/reportOutlook）
+└─ methods（面板侧 invoke 方法；闭包持有 focus）
+main.mjs = 激活流程 + invoke 分发 + deactivate（三个 dispose 收口）
+```
+
+跨模块的可变状态收敛到 `rt` 对象（五个字段）；单模块用的状态留在闭包里，
+deactivate 从「清 8 个模块级变量」变成 3 个 dispose 调用。
+
+### 26.2 顺手清掉的死代码
+
+`sessionPhases` 只写不读（onRunEvent 订阅的唯一作用是喂它），整条订阅与
+`unsubscribeRuns` 一并删除。
+
+### 26.3 热重载约束（本次拆分牵出的宿主修复）
+
+拆多文件后暴露了宿主 cache bust 的缺口：版本号只编进入口 URL，静态 import 的
+子模块永远命中旧缓存。两处修复（见 `plugin-host-api.md` §1.1）：
+
+- 宿主 `pluginDirVersion()`：版本改为插件**目录**最大 mtime；
+- 插件内模块引用一律走带 `?v=` 的动态导入（imp 链条），入口把版本透传给每个 lib。
+  验证：同进程先后以 v=111/222 加载，两代 runtime 互不可见、同代共享同一实例；
+  守门测试禁止插件内出现指向插件文件的静态 import。
+
+另有一个测试环境坑：jsdom 环境给 URL 构造器打补丁，`new URL('./x', fileUrl)` 的
+相对解析落到 `document.baseURI`（localhost:3000）上——相对解析一律用
+`import.meta.dirname` + `pathToFileURL` 手工拼。
+
+### 26.4 行数
+
+main.mjs 120；lib：runtime 32 / store 82 / format 92 / compose-bar 100 / files 107 /
+log-io 140 / shell 163 / methods 230 / report 250 / tasks 329 / tools 333。
+最大单文件 333 行，单一职责。
+
+### 26.5 已知边界
+
+原生 ESM 缓存按 URL 全进程共享：同一测试进程跑多个 import main.mjs 的测试文件时
+lib 是同一实例，隔离靠 activate()/deactivate() 重建状态——不要绕过这两个入口直接
+import lib（已写进 main.mjs 头注释）。

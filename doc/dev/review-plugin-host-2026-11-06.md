@@ -329,6 +329,7 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 | 1 | P1-1 / P1-2 / P1-3 + P2-1~P2-6 + P2-9 | ✅ `da024b9` |
 | 2 | 2.2 ① 托盘词表通用化、② kind 文案外移、③ 注释与重复类型 | ✅ 插件 v0.7.0 |
 | 3 | 2.3 `PluginContext` 类型化 + 插件侧 SDK 入口 | ✅ `49a3197` |
+| 4 | 3.1 插件 main 拆模块 + 宿主目录级 cache bust | ✅ 本轮 |
 
 批次 1 与批次 2 都补了测试，且都用「回滚到旧代码」验证过测试确实会失败。
 
@@ -361,7 +362,7 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 
 | 项 | 说明 |
 |---|---|
-| 3.1 插件 main 拆模块 | 现在 1718 行、七种职责；拆成 shell / log-io / store / report / tools |
+| ~~3.1 插件 main 拆模块~~ | ✅ 已拆（薄入口 + 10 个 lib，见 background-tasks-design.md §26） |
 | P2-7 `engines` 校验 | 声明了却不生效的契约比没有更糟 |
 | P2-8 `discoverPlugins` 目录缓存 | 同步 FS 在对话主链路上；顺带缓存 `pluginToolDescriptors()` |
 | P3-3~P3-10 | 都是顺手可修的小项：`PLUGIN_ID` 改用 `ctx.pluginId`、`normSession` 两处合一、`clearTasks` 批量推托盘、启动时不重复推托盘、`plugin-tools` 格式与重复 `asDetails`、多窗口广播收敛、`plugin-content-height` 的 400px 上限写进契约 |
