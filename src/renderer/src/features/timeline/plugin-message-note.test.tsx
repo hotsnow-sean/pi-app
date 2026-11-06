@@ -11,6 +11,8 @@ const ORIGIN = {
   pluginId: 'background-tasks',
   label: '后台任务',
   kind: 'report',
+  // 文案由插件自带：宿主不认识 'report'，也不该为它配一张映射表
+  kindLabel: '回报',
   detail: 'bg-3, bg-5',
 }
 
@@ -71,6 +73,8 @@ describe('PluginMessageNote', () => {
   it('长回报默认折成一行摘要：徽标和任务 id 常驻，正文收起来', () => {
     const { container } = render(<PluginMessageNote origin={ORIGIN} text={LONG} />)
 
+    // kind 文案来自 origin.kindLabel（插件自带），不是宿主按 kind 查表
+    expect(screen.getByText('回报')).toBeInTheDocument()
     expect(screen.getByText('bg-3, bg-5')).toBeInTheDocument()
     expect(screen.getByText('【后台任务回报】bg-3「编译」已完成，耗时 3.2s。')).toBeInTheDocument()
     expect(screen.queryByText(/line 1 of the tail/)).not.toBeInTheDocument()

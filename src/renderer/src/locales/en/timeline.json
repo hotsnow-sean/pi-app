@@ -243,8 +243,5 @@
   "mcp": {
     "noOutput": "No output",
     "fullOutput": "Full output:"
-  },
-  "pluginMessage": {
-    "kindReport": "Report"
   }
 }

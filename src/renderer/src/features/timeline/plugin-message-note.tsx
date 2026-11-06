@@ -1,15 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight } from '@renderer/components/icons'
+import type { PluginMessageOrigin } from '@shared/plugin-message'
 import { CodeBlockView } from './code-block-view'
 import { enrichPlainTextWithPaths } from './markdown-inline-paths'
-
-export type PluginMessageOrigin = {
-  pluginId: string
-  label: string
-  kind?: string
-  detail?: string
-}
 
 /** 短回报直接铺开：为两行字加一次点击不值当 */
 const FOLD_AFTER_LINES = 6
@@ -83,9 +77,11 @@ function summaryLine(blocks: MessageBlock[]): string {
 }
 
 /**
- * 插件投递的消息（目前是后台任务回报）在对话流里的展示：
- * 徽标常驻，正文超过阈值才折成一行摘要——一段回报最多能带 3 个任务各 20 行 tail，
- * 全铺开能把整屏占满。
+ * 插件投递的消息在对话流里的展示：徽标常驻，正文超过阈值才折成一行摘要——
+ * 一次回报最多能带 3 个任务各 20 行 tail，全铺开能把整屏占满。
+ *
+ * kind 的文案由插件自带（`origin.kindLabel`）：宿主不认识任何插件的 kind，
+ * 写死一张映射表只会让其他插件的 kind 显示成英文标识符。
  */
 export function PluginMessageNote({ origin, text }: { origin: PluginMessageOrigin; text: string }) {
   const { t } = useTranslation()
@@ -96,7 +92,7 @@ export function PluginMessageNote({ origin, text }: { origin: PluginMessageOrigi
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
   const foldable = lineCount > FOLD_AFTER_LINES || text.length > FOLD_AFTER_CHARS
   const open = userOpen ?? !foldable
-  const kindText = origin.kind === 'report' ? t('timeline:pluginMessage.kindReport') : origin.kind
+  const kindText = origin.kindLabel || origin.kind
 
   return (
     <div className="timeline-plugin-note">

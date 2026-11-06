@@ -170,7 +170,19 @@ function barMeta(task) {
  *
  * 归属判断留在 main（sameSession）而不是 UI：工具侧的 sessionFile 来自 worker，
  * 推送侧也只是插件自己知道的值，归一化只该有一份实现，两份早晚会漂。
+ *
+ * 注意 `state` / `tone` 用的是**宿主的观感词表**（active/ok/error/idle/warn），
+ * 不是本插件的状态机：宿主不认识 running/lost，也永远不该认识。业务状态到观感的
+ * 映射是插件的责任，见 rowStateOf。
  */
+function rowStateOf(task) {
+  if (task.status === 'running') return 'active'
+  if (task.status === 'exited') return 'ok'
+  if (task.status === 'lost') return 'warn'
+  if (task.status === 'stopped') return 'idle'
+  return 'error'
+}
+
 function composerBarFor(sessionFile) {
   const mine = state.tasks.filter((t) => sameSession(t.sessionFile, sessionFile))
   if (mine.length === 0) return null
@@ -185,13 +197,15 @@ function composerBarFor(sessionFile) {
   return {
     summary,
     detail: (running[0] ?? failed[0] ?? ordered[0])?.label ?? '',
-    tone: running.length ? 'running' : failed.length ? 'error' : 'done',
+    tone: running.length ? 'active' : failed.length ? 'error' : 'ok',
     rows: ordered.slice(0, BAR_MAX_ROWS).map((t) => ({
       id: t.id,
       label: t.label,
-      status: t.status,
+      state: rowStateOf(t),
       // 运行中的耗时由宿主现算：推一次就固化的「12s」会骗人
-      ...(t.status === 'running' ? { startedAt: t.startedAt, action: 'stop' } : { meta: barMeta(t) }),
+      ...(t.status === 'running'
+        ? { startedAt: t.startedAt, actions: [{ id: 'stop', icon: 'stop', title: '停止' }] }
+        : { meta: barMeta(t) }),
     })),
     panelId: PANEL_ID,
   }
@@ -1000,6 +1014,8 @@ async function deliver(sessionFile, items, skipped) {
         pluginId: PLUGIN_ID,
         label: '后台任务',
         kind: 'report',
+        // kind 的界面文案由插件自带：宿主不认识 'report'，也不该为它维护一张映射表
+        kindLabel: '回报',
         detail: live.map((t) => t.id).join(', '),
       },
     })
@@ -1454,8 +1470,10 @@ const methods = {
   /**
    * 托盘里的点击回调（宿主约定的方法名）。
    *
-   * 宿主只负责把「点了哪一行、点了什么动作」传回来，不解释业务：select 是看详情，
-   * stop 是停任务。详情定位复用 focus.seq——右栏面板自己比对，宿主不必知道这套。
+   * 宿主只负责把「点了哪一行、点了什么动作」传回来：点行固定传 `select`（这是宿主
+   * 唯一的保留字，表示「看详情」），点行内按钮则原样回传**本插件自定义的 action id**
+   * （这里是 `stop`，定义在 composerBarFor 的 actions 里）。详情定位复用 focus.seq——
+   * 右栏面板自己比对，宿主不必知道这套。
    */
   async composerBarAction({ action, id } = {}) {
     const task = taskById(String(id || ''))
