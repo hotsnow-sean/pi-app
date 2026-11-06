@@ -254,5 +254,8 @@
     "earlierCalls": "展开更早的 {{count}} 次调用",
     "collapseCalls": "收起较早调用",
     "modelCost": "模型调用: {{cost}}"
+  },
+  "pluginMessage": {
+    "kindReport": "回报"
   }
 }

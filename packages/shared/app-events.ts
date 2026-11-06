@@ -3,6 +3,7 @@
 import type { CompletionOutcome } from './completion-preview'
 import type { AdapterWidgetProjection, AdapterWidgetProtocol } from './adapter-widget'
 import type { PluginComposerBarState } from './plugin-composer-bar'
+import type { PluginMessageOrigin } from './plugin-message'
 
 export interface AppEventBase {
   seq: number
@@ -24,6 +25,8 @@ export interface MessageEvent extends AppEventBase {
   contentKind?: 'text' | 'thinking'
   /** pi JSONL entry id（跳转 /tree 用） */
   sessionEntryId?: string
+  /** 插件投递的消息（sessions.send）：带来源，界面渲染成转述行而不是用户气泡 */
+  pluginOrigin?: PluginMessageOrigin
 }
 
 export interface ToolEvent extends AppEventBase {

@@ -40,7 +40,10 @@ test('plugin tool sends a message back into the calling session', async () => {
       .toBe(true)
 
     // 4. 界面上同样可见：custom message 占用户位，但不是无名无姓的伪造输入
-    await expect(win.getByText('【回话测试】后台任务回报已送达').first()).toBeVisible({ timeout: 30_000 })
+    const reportText = win.getByText('【回话测试】后台任务回报已送达').first()
+    await expect(reportText).toBeVisible({ timeout: 30_000 })
+    // 5. 渲染成转述行（左对齐 + 来源徽标），而不是和用户气泡混为一谈
+    await expect(reportText.locator('xpath=ancestor::*[contains(@class,"timeline-plugin-row")]')).toHaveCount(1)
   } finally {
     await agent.close()
   }

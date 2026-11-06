@@ -254,5 +254,8 @@
     "earlierCalls": "Show {{count}} earlier calls",
     "collapseCalls": "Hide earlier calls",
     "modelCost": "Model calls: {{cost}}"
+  },
+  "pluginMessage": {
+    "kindReport": "Report"
   }
 }

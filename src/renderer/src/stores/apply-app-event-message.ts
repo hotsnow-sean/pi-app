@@ -53,6 +53,21 @@ function ensureStreamingAssistant(event: MessageEvent, api: StoreApi): string {
 export function handleMessage(event: MessageEvent, api: StoreApi): void {
   const state = api.get()
   if (event.phase === 'start' && event.role === 'user') {
+    // 插件投递的回报（sessions.send）：不是用户说的话，绝不与用户乐观行合并
+    // （合并会把用户没打完的字替换成回报正文），直接以转述行入列。
+    if (event.pluginOrigin) {
+      state.appendTimeline({
+        id: api.nextItemId(),
+        type: 'user-message',
+        text: event.text,
+        runId: event.runId,
+        turnId: event.turnId,
+        timestamp: event.timestamp,
+        sessionEntryId: event.sessionEntryId,
+        pluginOrigin: event.pluginOrigin,
+      })
+      return
+    }
     // A queued message delivered just as the user hit Stop must not re-light the run.
     if (state.runState.status !== 'running' && !isAbortUiHoldActive(event.sessionFile)) {
       state.setRunState({ status: 'running', startTime: event.timestamp })

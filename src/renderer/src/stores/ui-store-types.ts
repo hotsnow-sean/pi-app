@@ -1,5 +1,6 @@
 import type { AdapterWidgetProjection } from '@shared/adapter-widget'
 import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
+import type { PluginMessageOrigin } from '@shared/plugin-message'
 import type { AppEvent } from '@shared/app-events'
 import type { ToolCallDetail } from '@shared/tool-call-detail'
 import type { RightPanelCatalogItem, RightPanelPrefs } from '@shared/right-panels'
@@ -65,6 +66,8 @@ export interface TimelineItem {
   slashStatus?: 'dispatched' | 'ok' | 'error' | 'info'
   errorKind?: 'error' | 'aborted' | 'retry'
   sessionEntryId?: string
+  /** 插件投递消息（sessions.send）的来源：界面渲染成转述行而不是用户气泡 */
+  pluginOrigin?: PluginMessageOrigin
   /** Force-quit / abort mid-stream — empty or partial assistant leaf */
   incomplete?: boolean
   stopReason?: string
