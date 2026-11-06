@@ -159,4 +159,26 @@ describe('Notification inbox feedback', () => {
     fireEvent.click(screen.getByRole('button', { name: 'common:notification.markUnread' }))
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('notifications.markUnread', { id: 'n1', unread: true }))
   })
+
+  // IPC 桥没注入时 invoke 返回 {}（见 ipcClient 的空实现）——曾经把 undefined 写进 state，
+  // 下一次渲染在 items.filter 上炸掉整个外壳。
+  it('survives a response without items instead of crashing the shell', async () => {
+    useUIStore.setState({ sessionAttention: {} })
+    mocks.invoke.mockImplementation(async () => ({}))
+    render(<NotificationInbox />)
+    fireEvent.click(screen.getByRole('button', { name: 'common:notification.inbox' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('common:notification.loadFailed')
+    expect(screen.queryByText('common:notification.empty')).not.toBeInTheDocument()
+  })
+
+  it('routes a plugin item to its view and marks it read', async () => {
+    useUIStore.setState({ sessionAttention: {} })
+    const item = { notificationId: 'p:scheduler:task-1', workspaceId: '', outcome: 'success', unread: true, tone: 'success', target: { pluginId: 'scheduler', viewId: 'main' }, copy: { title: '定时任务：每日简报', body: '有变化：3 条新评论' } }
+    mocks.invoke.mockImplementation(async (method: string) => method === 'notifications.inbox' ? { items: [item] } : { ok: true })
+    render(<NotificationInbox />)
+    fireEvent.click(screen.getByRole('button', { name: 'common:notification.inbox' }))
+    fireEvent.click(await screen.findByText('定时任务：每日简报'))
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('notifications.markRead', { id: 'p:scheduler:task-1' }))
+    expect(useUIStore.getState().centerView).toEqual({ kind: 'plugin', pluginId: 'scheduler', viewId: 'main' })
+  })
 })
