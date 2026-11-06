@@ -328,7 +328,7 @@ interface Row { id; label; state: RowState; meta?; startedAt?;
 |---|---|---|
 | 1 | P1-1 / P1-2 / P1-3 + P2-1~P2-6 + P2-9 | ✅ `da024b9` |
 | 2 | 2.2 ① 托盘词表通用化、② kind 文案外移、③ 注释与重复类型 | ✅ 插件 v0.7.0 |
-| 3 | 2.3 `PluginContext` 类型化 + 插件侧 SDK 入口 | ✅ 本轮 |
+| 3 | 2.3 `PluginContext` 类型化 + 插件侧 SDK 入口 | ✅ `49a3197` |
 
 批次 1 与批次 2 都补了测试，且都用「回滚到旧代码」验证过测试确实会失败。
 
