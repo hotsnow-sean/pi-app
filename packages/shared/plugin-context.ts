@@ -97,6 +97,35 @@ export interface PluginSessions {
    * 「要不要投递」——`send` 自己处理忙闲。返回解除函数，停用时宿主也会兜底回收。
    */
   onRunEvent(handler: (payload: PluginSessionRunEvent) => void): () => void
+  /**
+   * 把一段会话**只读预览**到主区域（`openSessionPreview` 语义）。
+   *
+   * 用途是「我在这条记录上看到有个子会话，想看看它到底在干什么」。刻意只做预览：
+   * 不绑定 worker、不能对它发提示词——那等于让插件获得指挥用户会话的能力，
+   * 超出观测层的定位。用户想接手，自己从侧栏切过去。
+   *
+   * 传绝对路径（插件一般从工具 details 或事件载荷里拿到）。文件不存在/已过期时
+   * 静默不动，不抛错：这类会话多来自一次性 run，过期是常态，插件不该为此报错。
+   *
+   * @returns 路径看起来可用（已发起导航）为 true；路径非法/文件已不存在为 false。
+   * 只校验「这段会话还在不在」，不保证用户真的看到了——导航是异步的，用户可能
+   * 立刻切走。插件拿它来决定是否提示「会话已过期」，别拿它判断 UI 状态。
+   */
+  reveal(sessionFile: string): Promise<boolean>
+
+  /**
+   * **切到**一段会话（「回去」，与 reveal 的「看一眼」相对）。
+   *
+   * 目标会话在当前工作区侧栏里 → 正常激活（可写、绑 worker，和用户自己点侧栏
+   * 一样）；不在（子代理的子会话、跨工作区）→ 退化为只读预览——那段会话本来
+   * 就没法作为普通会话打开。
+   *
+   * 典型用途：面板从「主会话点进了子会话预览」回来时，用 activate 回主会话，
+   * 用户拿到的是可写的对话，而不是又一个预览。
+   *
+   * 校验与静默语义同 reveal：路径不合规/文件不存在返回 false，不抛错。
+   */
+  activate(sessionFile: string): Promise<boolean>
 }
 
 /** `ctx.ui.ask` 的选项 */
@@ -113,10 +142,26 @@ export interface PluginAskOptions {
  */
 export type PluginInboxTone = 'info' | 'success' | 'warn' | 'error'
 
-/** 点信箱条目跳到哪个插件的哪个视图（manifest `views[].id`） */
+/**
+ * 点信箱条目跳到哪。
+ *
+ * 两个落点二选一，语义不同：
+ * - `viewId`：占满中间列的插件视图（manifest `views[].id`）。适合「需要宽度」的详情。
+ * - `panelId`：右栏页签（manifest `panels[].id`，写**插件自己的** id，不用拼 `plugin:` 前缀）。
+ *   适合「顺手看一眼」——用户当前在对话里，不该被一整页顶掉。两者都传时以 `panelId`
+ *   为准：右栏更轻，而右栏里通常就带着通往中央视图的入口。
+ *
+ * 注意右栏面板是**会话的附属物**（内容通常跟着当前会话变）。所以想让用户看到「某会话的
+ * 子代理」，正确做法是给条目挂 `PluginInboxItem.sessionFile` 先回到那段对话，右栏自然
+ * 跟着到那个会话；单独 `panelId` 只适合与具体会话无关的全局面板。
+ *
+ * 与 `sessionFile` 同时给时的优先级：**会话 → 右栏面板**。`viewId` 会被忽略（否则
+ * 插件页立刻顶掉刚打开的会话），`panelId` 照常叠加。
+ */
 export interface PluginInboxTarget {
   pluginId: string
-  viewId: string
+  viewId?: string
+  panelId?: string
 }
 
 /**
@@ -124,7 +169,7 @@ export interface PluginInboxTarget {
  *
  * 定位是「值得你知道的一次事件」，不是归档：宿主信箱是 main 侧的内存数组
  * （重启即空，上限 200 条），完整历史必须留在插件自己的存储里，条目点开只是
- * 跳到插件视图。所以标题一行、正文一两句，别把结果全文塞进来。
+ * 回去看现场（那段会话 / 那个插件页）。所以标题一行、正文一两句，别把结果全文塞进来。
  */
 export interface PluginInboxItem {
   /** 一行标题。宿主会截断，别放长句 */
@@ -133,6 +178,19 @@ export interface PluginInboxItem {
   body?: string
   /** 观感；缺省按 info */
   tone?: PluginInboxTone
+  /**
+   * 这条记录属于哪段会话（绝对路径）。
+   *
+   * 两个作用，都很实在：
+   * - **未读判定**：用户正看着这段会话时，条目直接算已读（和宿主的完成卡同一套规则）；
+   * - **点击落点**：点开先回到这段对话，再看 `target` 决定要不要顺手亮右栏面板。
+   *
+   * 子代理、定时任务这类「由会话产生的事件」都应该带它。不携带的条目是纯插件级
+   * 通知（比如「插件需要重新配置」），点开只会到插件页。
+   *
+   * 文件已不存在时点击会提示「会话已不存在」（不抛错，条目本身照常保留）。
+   */
+  sessionFile?: string
   /**
    * 点击后跳到哪。**不传也能用**——条目照常进信箱、照常标已读，
    * 只是点不动（未读红点仍然会提醒）。

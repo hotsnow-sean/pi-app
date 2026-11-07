@@ -6,7 +6,7 @@ import type { SessionItem } from '@renderer/stores/ui-store-types'
 import { openSessionIntoWorker } from '@renderer/lib/open-session'
 import { composerTurnActive } from '@renderer/lib/session-worker-sync'
 import { workspacePathsEqual } from '@shared/workspace-path'
-import { isCurrentSubagentSessionPreview } from '@renderer/lib/subagent-session-preview'
+import { isCurrentReadOnlyPreview } from '@renderer/lib/subagent-session-preview'
 import { selectSessionAttention } from '@renderer/lib/session-attention'
 import { sessionFilesEqual } from '@renderer/lib/session-file-key'
 
@@ -34,7 +34,7 @@ function assertIdleForBranchAction(source?: ForkSource): boolean {
     }))
     return false
   }
-  if (isCurrentSubagentSessionPreview()) {
+  if (isCurrentReadOnlyPreview()) {
     toast.warning(i18n.t('composer:toast.subagentPreviewReadOnly'))
     return false
   }
@@ -237,7 +237,7 @@ export async function cloneCurrentSession(source?: ForkSource): Promise<boolean>
 }
 
 export async function loadForkCandidates(source?: ForkSource): Promise<Array<{ entryId: string; text: string }>> {
-  if (isCurrentSource(source) && isCurrentSubagentSessionPreview()) return []
+  if (isCurrentSource(source) && isCurrentReadOnlyPreview()) return []
   const sessionFile = source?.sessionFile || resolveSourceSessionFile()
   if (!sessionFile) return []
   try {

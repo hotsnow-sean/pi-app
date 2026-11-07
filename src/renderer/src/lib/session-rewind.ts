@@ -6,7 +6,7 @@ import { refreshSessionTree } from '@renderer/lib/rewind-metadata'
 import type { TimelineItem } from '@renderer/stores/ui-store-types'
 import { captureFocusFromUiStore } from '@renderer/lib/session-shell'
 import { getSessionMessagesFromDiskViaIpc } from '@renderer/lib/session-history'
-import { isCurrentSubagentSessionPreview } from '@renderer/lib/subagent-session-preview'
+import { isCurrentReadOnlyPreview } from '@renderer/lib/subagent-session-preview'
 import { sessionFilesEqual } from '@renderer/lib/session-file-key'
 import { getSessionNavigationToken, isSessionNavigationCurrent } from '@renderer/lib/session-navigation'
 import { sanitizeHistoryTimeline } from '@renderer/lib/timeline-dedupe'
@@ -20,7 +20,7 @@ export async function navigateSessionToEntry(targetId: string): Promise<boolean>
   let stillCurrent = () => true
   console.log('[rewind] navigateSessionToEntry start, targetId=', targetId)
   try {
-    if (isCurrentSubagentSessionPreview()) {
+    if (isCurrentReadOnlyPreview()) {
       toast.warning(i18n.t('composer:toast.subagentPreviewReadOnly'))
       return false
     }

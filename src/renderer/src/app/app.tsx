@@ -297,6 +297,20 @@ export default function App() {
         }
         return
       }
+      if (event.type === 'plugin_reveal_session') {
+        // 插件要求「看我这段会话」：只读预览，不绑定 worker。
+        // 动态 import：这条路径平时不走，没必要进首屏包。
+        const file = event.sessionFile
+        void import('@renderer/lib/reveal-session').then((m) => m.revealSessionPreview(file))
+        return
+      }
+      if (event.type === 'plugin_activate_session') {
+        // 插件要求「回到这段会话」：在当前工作区就正常激活（可写），不在才退化为预览。
+        // 与 reveal 的分工见 activatePluginSession 的注释；动态 import 理由相同。
+        const file = event.sessionFile
+        void import('@renderer/lib/activate-plugin-session').then((m) => m.activatePluginSession(file))
+        return
+      }
       useUIStore.getState().processEvent(event)
     })
     // 插件托盘启动兜底：插件激活与本窗口挂事件监听是并行的，谁先谁后都可能，

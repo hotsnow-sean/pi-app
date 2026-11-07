@@ -22,6 +22,8 @@
   "previewBackgroundRunning": "Running in background",
   "subagentPreviewReadOnly": "Subagent sessions are read-only",
   "subagentPreviewBanner": "Viewing a subagent session. Return to the parent conversation to send messages.",
+  "readOnlyPreviewPlaceholder": "Read-only preview — messages cannot be sent",
+  "readOnlyPreviewBanner": "Read-only preview. Open a conversation from the sidebar to send messages.",
   "joinQueue": "Queue (follow-up)",
   "addFile": "Add file",
   "dropToAdd": "Drop to add",

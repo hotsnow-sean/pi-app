@@ -3,6 +3,7 @@ import { app, shell, type BrowserWindow, dialog, session, Menu } from 'electron'
 import { registerPluginProtocolScheme } from './plugins/protocol'
 import { createWindow, getMainWindow } from './window'
 import { refreshGitWorkspaceWatch } from './git-workspace-watch'
+import { releaseSessionTailsForSender } from './session-tails'
 import { registerAllHandlers } from './ipc'
 import { workerManager } from './worker-manager'
 import { sessionPreviewProcess } from './session-preview-process'
@@ -54,6 +55,20 @@ function attachCompletionNotificationShortcut(win: BrowserWindow): void {
     if (!isCompletionNotificationShortcut(input)) return
     if (focusCompletionNotificationHost()) event.preventDefault()
   })
+}
+
+/**
+ * 会话文件监听的句柄回收。
+ *
+ * 按窗口记账的订阅必须在窗口消失时收回，否则 main 侧会留一个永远不会退订的
+ * `fs.watch`，对着一个可能已经没人看的会话每 1.2 秒 stat 一次。
+ *
+ * 除 `destroyed` 外还要盯 `did-navigate`：reload 后 webContents id 不变，
+ * 订阅关系看起来「还活着」，但新页面根本没打开任何预览——这种残留最容易被忽略。
+ */
+function attachSessionTailCleanup(win: BrowserWindow): void {
+  win.webContents.on('destroyed', () => releaseSessionTailsForSender(win.webContents))
+  win.webContents.on('did-navigate', () => releaseSessionTailsForSender(win.webContents))
 }
 
 function createMenu(): void {
@@ -144,6 +159,7 @@ app.whenReady().then(() => {
   })
   const win = createWindow(closeToTray)
   workerManager.setMainWindow(win)
+  attachSessionTailCleanup(win)
   // Mobile gateway: only listens when the user left it on (Settings → 手机连接).
   void import('./remote-gateway-service').then((m) => m.startRemoteGatewayIfEnabled())
   attachCompletionNotificationShortcut(win)
@@ -170,6 +186,7 @@ app.whenReady().then(() => {
     if (!getMainWindow()) {
       const w = createWindow(ensureAppTray() !== null)
       workerManager.setMainWindow(w)
+      attachSessionTailCleanup(w)
       attachCompletionNotificationShortcut(w)
       w.on('focus', () => notifyForegroundChanged())
       w.on('restore', () => notifyForegroundChanged())

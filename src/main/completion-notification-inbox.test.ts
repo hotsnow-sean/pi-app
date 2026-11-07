@@ -207,7 +207,7 @@ describe('completion inbox with default alert settings', () => {
 })
 
 describe('plugin inbox', () => {
-  function makeCtrl() {
+  function makeCtrl(visibleFile: string | null = null) {
     const delivered: unknown[] = []
     const ctrl = createCompletionNotificationController({
       now: () => Date.now(),
@@ -227,7 +227,7 @@ describe('plugin inbox', () => {
         language: 'zh',
       }),
       getWindowState: () => ({ focused: true, visible: true, minimized: false }),
-      getVisibleSessionFile: () => null,
+      getVisibleSessionFile: () => visibleFile,
       projectLabel: () => 'proj',
       deliver: (card) => delivered.push(card),
     })
@@ -253,8 +253,37 @@ describe('plugin inbox', () => {
     expect(delivered).toHaveLength(0)
   })
 
-  it('dedupeKey 命中时替换旧条目并重新变未读', () => {
-    const { ctrl } = makeCtrl()
+  /**
+   * 归属会话的三个作用一次验完：未读判定、条目带上路径、来源插件可辨。
+   *
+   * 未读这一条最容易漏：插件的子代理/定时任务跑完时，用户可能正看着那段会话——
+   * 和自己跑完一轮一样，不该再亮红点。
+   */
+  it('带 sessionFile 的条目：正看着那段会话时算已读，并记下来源插件', () => {
+    const { ctrl } = makeCtrl('c:\\work\\a.jsonl')
+    ctrl.pushPluginInbox('subagents', {
+      title: '子代理完成',
+      // 反斜杠 + 小写盘符：归一化后必须认成同一段会话（否则每次都会亮红点）
+      sessionFile: 'C:/work/a.jsonl',
+      target: { pluginId: 'subagents', panelId: 'board' },
+    })
+    const [item] = ctrl.listInbox()
+    expect(item.unread).toBe(false)
+    expect(item.sessionFile).toBe('C:/work/a.jsonl')
+    expect(item.pluginId).toBe('subagents')
+    expect(item.target).toEqual({ pluginId: 'subagents', panelId: 'board' })
+  })
+
+  it('不在该会话时照常未读；只给 sessionFile 不给 target 也允许', () => {
+    const { ctrl } = makeCtrl('C:/work/other.jsonl')
+    ctrl.pushPluginInbox('subagents', { title: '子代理完成', sessionFile: 'C:/work/a.jsonl' })
+    const [item] = ctrl.listInbox()
+    expect(item.unread).toBe(true)
+    expect(item.pluginId).toBe('subagents')
+    expect(item.target).toBeUndefined()
+  })
+
+  it('dedupeKey 命中时替换旧条目并重新变未读', () => {    const { ctrl } = makeCtrl()
     ctrl.pushPluginInbox('scheduler', { title: '第一次', dedupeKey: 'task-1' })
     const first = ctrl.listInbox()[0]
     ctrl.markInboxRead(first.notificationId)

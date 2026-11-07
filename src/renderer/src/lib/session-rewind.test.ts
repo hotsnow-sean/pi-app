@@ -9,7 +9,9 @@ vi.mock('@renderer/lib/session-history', () => ({
 vi.mock('@renderer/lib/session-shell', () => ({ captureFocusFromUiStore: vi.fn() }))
 vi.mock('@renderer/lib/session-display-meta', () => ({ applyComposerDisplayMeta: mocks.meta }))
 vi.mock('@renderer/lib/rewind-metadata', () => ({ refreshSessionTree: vi.fn() }))
-vi.mock('@renderer/lib/subagent-session-preview', () => ({ isCurrentSubagentSessionPreview: () => false }))
+vi.mock('@renderer/lib/subagent-session-preview', () => ({
+  isCurrentReadOnlyPreview: () => false,
+}))
 vi.mock('sonner', () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }))
 
 import { navigateSessionToEntry } from './session-rewind'

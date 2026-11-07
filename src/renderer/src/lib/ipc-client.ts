@@ -31,6 +31,9 @@ declare global {
         }) => void,
       ) => () => void
       terminalWrite?: (id: string, data: string) => void
+      onSessionTail?: (
+        callback: (payload: { sessionFile: string; size: number; truncated: boolean }) => void,
+      ) => () => void
       onTerminalData?: (callback: (payload: { id: string; data: string }) => void) => () => void
       onTerminalExit?: (callback: (payload: { id: string; code: number }) => void) => () => void
       ping: () => string
@@ -124,4 +127,12 @@ export function onNotificationOpenSession(
 ): () => void {
   if (!window.piDesktop?.onNotificationOpenSession) return () => {}
   return window.piDesktop.onNotificationOpenSession(callback)
+}
+
+/** 预览中的会话文件有新增（main 侧按窗口记账，退订走 `session.tail.unsubscribe`） */
+export function onSessionTail(
+  callback: (payload: { sessionFile: string; size: number; truncated: boolean }) => void,
+): () => void {
+  if (!window.piDesktop?.onSessionTail) return () => {}
+  return window.piDesktop.onSessionTail(callback)
 }

@@ -71,6 +71,7 @@ export const useUIStore = create<UIState>()(
             sessionsWorkspace: null,
             currentSessionId: null,
             subagentSessionGroup: null,
+            readOnlyPreviewFile: null,
           }
           : {}),
       }
@@ -88,6 +89,7 @@ export const useUIStore = create<UIState>()(
       set({
         currentSessionId: null,
         subagentSessionGroup: null,
+        readOnlyPreviewFile: null,
         rewindTreeNodes: [],
         rewindWorkerBound: false,
         rewindLoadingTree: false,
@@ -182,6 +184,8 @@ export const useUIStore = create<UIState>()(
   setHistoryLoading: (v) => set({ historyLoading: v }),
   subagentSessionGroup: null,
   setSubagentSessionGroup: (group) => set({ subagentSessionGroup: group }),
+  readOnlyPreviewFile: null,
+  setReadOnlyPreviewFile: (sessionFile) => set({ readOnlyPreviewFile: sessionFile }),
 
   timelineItems: [],
   streamingAssistantId: null,

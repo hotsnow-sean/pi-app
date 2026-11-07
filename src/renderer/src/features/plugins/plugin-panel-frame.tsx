@@ -3,6 +3,7 @@ import { ipcClient } from '@renderer/lib/ipc-client'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { pluginEntryUrl } from '@shared/plugin-panel-url'
 import { PLUGIN_BRIDGE_PROTOCOL } from '@shared/plugin-bridge'
+import { pluginPanelGlobalId } from '@shared/plugin-manifest'
 
 /**
  * 会话条（content 模式）上报高度的上限。会话条是对话流的租客，超过这个高度的
@@ -202,8 +203,13 @@ export function PluginPanelFrame({
       if (data.type === 'plugin-open-panel') {
         // 插件请求「把某个右栏面板亮出来」：例如会话条点任务 → 看详情。
         // 只在目录里真实存在时才动手，拼错的 id 不该把右栏清空。
+        //
+        // id 两种写法都收：manifest 里的局部 id（插件的自然写法，宿主补全成
+        // `plugin:<插件>:<面板>`）与已带命名空间的完整 id。只比对局部 id 会永远不命中——
+        // 目录里存的是完整 id，用户看到的却是「点了没反应」。
         const requestId = Number(data.requestId)
-        const target = String(data.panelId ?? '')
+        const raw = String(data.panelId ?? '').trim()
+        const target = raw && !raw.startsWith('plugin:') ? pluginPanelGlobalId(pluginId, raw) : raw
         const store = useUIStore.getState()
         const exists = !!target && store.rightPanelCatalog.some((c) => c.id === target)
         if (exists) {

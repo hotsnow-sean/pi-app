@@ -256,6 +256,7 @@
   "notification": {
     "sessionGone": "This session was deleted or is unavailable",
     "openFailed": "Could not open that session",
+    "pluginTargetMissing": "Could not open that notification: the plugin panel may have been removed",
     "inbox": "Notifications",
     "empty": "No notifications",
     "markUnread": "Mark unread",

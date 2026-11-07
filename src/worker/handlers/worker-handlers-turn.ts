@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { preparePiCliEntry } from '../worker-cli-entry.js'
 import { widenHttpConnectTimeout } from '../worker-http-connect.js'
+import { setPluginAgentExtensions } from '../worker-plugin-agent-extensions.js'
 import { errorMessage } from '@shared/error-message'
 import { normalizeUserMessageDisplayText } from '@shared/worker-message'
 import type { WorkerIncomingMessage } from '../worker-port-types.js'
@@ -48,6 +49,9 @@ export async function handleInit(msg: WorkerIncomingMessage, reply: WorkerReply)
             console.warn('[Worker] Could not resolve Pi CLI entry:', errorMessage(e))
           }
           if (!st.sharedEventBus) st.sharedEventBus = st.sdk.createEventBus()
+          // 插件会话扩展清单必须在 initSession 之前落地：会话 runtime 是在那里面
+          // 按 extensionFactories 建起来的，晚一步这一整个会话就没有插件扩展。
+          setPluginAgentExtensions(msg.pluginAgentExtensions)
           await initSession(String(msg.cwd || ''))
           if (resolvedEntry) {
             const globalCfg = (st.session?.settingsManager as { getGlobalSettings?: () => Record<string, unknown> } | undefined)?.getGlobalSettings?.()

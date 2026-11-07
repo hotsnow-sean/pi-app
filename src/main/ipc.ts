@@ -2,6 +2,7 @@ import { registerDialogHandlers } from './ipc/handlers/dialog'
 import { registerWorkspaceFsHandlers } from './ipc/handlers/workspace-fs'
 import { registerWorkspaceHandlers } from './ipc/handlers/workspace'
 import { registerSessionHandlers } from './ipc/handlers/session'
+import { registerSessionTailHandlers } from './ipc/handlers/session-tail'
 import { registerPromptHandlers } from './ipc/handlers/prompt'
 import { registerSettingsHandlers } from './ipc/handlers/settings'
 import { registerWindowControlHandlers } from './ipc/handlers/window-controls'
@@ -33,6 +34,7 @@ export function registerAllHandlers(): void {
   registerWorkspaceFsHandlers()
   registerWorkspaceHandlers()
   registerSessionHandlers()
+  registerSessionTailHandlers()
   registerPromptHandlers()
   registerSettingsHandlers()
   registerWindowControlHandlers()

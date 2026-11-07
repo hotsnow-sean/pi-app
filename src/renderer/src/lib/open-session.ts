@@ -13,6 +13,7 @@ import {
   hydrateSessionView,
 } from '@renderer/lib/session-shell'
 import { sessionFilesEqual } from '@renderer/lib/session-file-key'
+import { unwatchSessionTail, watchSessionTail } from '@renderer/lib/session-tail-sync'
 
 async function openExistingSessionView(
   sessionId: string,
@@ -40,6 +41,14 @@ async function openExistingSessionView(
   if (bindWorker) {
     void ipcClient.invoke('session.setPendingBind', { sessionFile: sessionKey }).catch(() => {})
   }
+  // 只读标记的**唯一维护点**：绑定 worker = 可写，预览 = 只读。
+  // 不这么收口的话，两条预览来源（兄弟组 / 通用预览）会各写各的，迟早漏一处，
+  // 用户就会在只读视图里看到一个能发消息的输入框。
+  useUIStore.getState().setReadOnlyPreviewFile(bindWorker ? null : sessionKey)
+  // 预览态（bindWorker=false）没有事件流可依赖，靠文件监听跟进；绑定会话由实时事件驱动。
+  // 放在这里而不是更外层：`sessionKey` 是归一化后的路径，和 main 侧 tail 记账的键一致。
+  if (bindWorker) void unwatchSessionTail()
+  else void watchSessionTail(sessionKey)
   void refreshSessionTree(sessionFile)
 
   if (instant) {
@@ -96,6 +105,8 @@ export async function openSessionIntoWorker(
     })
     store.setWorkerLiveSnapshot({ sessionId: null, sessionFile: null, status: 'idle' })
     await ipcClient.invoke('session.setPendingBind', { sessionFile: null }).catch(() => {})
+    // 新会话草稿没有文件可盯
+    void unwatchSessionTail()
     if (navToken != null && !assertSessionNavigation(navToken)) return
     await applyComposerDisplayMeta()
     void refreshSessionTree(null)

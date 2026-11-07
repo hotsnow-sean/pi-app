@@ -51,7 +51,7 @@ import { useComposerKeyDown } from './use-composer-keydown'
 import { useComposerFileSearch } from './use-composer-file-search'
 import { ComposerFilePopover } from './composer-file-popover'
 import { ComposerAgentActivity } from './composer-agent-activity'
-import { isSubagentSessionPreview } from '@renderer/lib/subagent-session-preview'
+import { isReadOnlyPreviewSession, isSubagentSessionPreview } from '@renderer/lib/subagent-session-preview'
 import {
   composerDraftContextKey,
   readTransientComposerDraft,
@@ -87,6 +87,7 @@ export function Composer() {
   const currentSessionId = useUIStore((s) => s.currentSessionId)
   const historySessionFile = useUIStore((s) => s.historySessionFile)
   const subagentSessionGroup = useUIStore((s) => s.subagentSessionGroup)
+  const readOnlyPreviewFile = useUIStore((s) => s.readOnlyPreviewFile)
   const workerLiveSnapshot = useUIStore((s) => s.workerLiveSnapshot)
   const ephemeralSandboxDraft = useUIStore((s) => s.ephemeralSandboxDraft)
   const pendingNew = useUIStore((s) => s.pendingNewSessionPlaceholder)
@@ -102,6 +103,12 @@ export function Composer() {
     () => isSubagentSessionPreview(subagentSessionGroup, historySessionFile),
     [historySessionFile, subagentSessionGroup],
   )
+  // 通用只读预览（插件 reveal / 信箱退回只读）：没有兄弟组可依赖，走独立的标记。
+  // 两种来源对「能不能发送」是同一件事，但文案不同——前者能回父会话，后者只能离开。
+  const readOnlyPreview = useMemo(
+    () => readOnlySubagentPreview || isReadOnlyPreviewSession(readOnlyPreviewFile, historySessionFile),
+    [historySessionFile, readOnlyPreviewFile, readOnlySubagentPreview],
+  )
   const sessionPreview = useMemo(
     () =>
       !ephemeralSandboxDraft &&
@@ -111,7 +118,7 @@ export function Composer() {
         historySessionFile,
         workerLiveSnapshot.sessionFile,
         workerLiveSnapshot.status,
-        readOnlySubagentPreview,
+        readOnlyPreview,
       ),
     [
       ephemeralSandboxDraft,
@@ -119,7 +126,7 @@ export function Composer() {
       historySessionFile,
       workerLiveSnapshot.sessionFile,
       workerLiveSnapshot.status,
-      readOnlySubagentPreview,
+      readOnlyPreview,
     ],
   )
   const canSendMessages = canCompose && !sessionPreview
@@ -447,7 +454,11 @@ export function Composer() {
       <ComposerPendingQueue />
       {sessionPreview && (
         <div className="mb-2 flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200/90">
-          <span className="min-w-0 flex-1">{t('composer:subagentPreviewBanner')}</span>
+          <span className="min-w-0 flex-1">
+            {readOnlySubagentPreview
+              ? t('composer:subagentPreviewBanner')
+              : t('composer:readOnlyPreviewBanner')}
+          </span>
           {workerLiveSnapshot.status === 'running' && (
             <span className="shrink-0 rounded-md bg-amber-500/15 px-2 py-0.5 font-medium">
               {t('composer:previewBackgroundRunning')}
@@ -540,7 +551,9 @@ export function Composer() {
               voiceState === 'recording' || voiceState === 'transcribing'
                 ? ''
                 : sessionPreview
-                  ? t('composer:subagentPreviewReadOnly')
+                  ? readOnlySubagentPreview
+                    ? t('composer:subagentPreviewReadOnly')
+                    : t('composer:readOnlyPreviewPlaceholder')
                   : ephemeralSandboxDraft && !currentWorkspace
                     ? t('composer:firstMsgIsTitle')
                     : canCompose

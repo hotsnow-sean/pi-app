@@ -104,6 +104,7 @@ let ctx
 | `ctx.runAgentPrompt({cwd, prompt, timeoutMs})` | 起一个**独立 inMemory 会话**跑一次 prompt，阻塞到结束。用户看不见、历史不连续 |
 | `ctx.sessions.send(spec)` | 往**用户自己的会话**投递消息并驱动一轮（见 §3） |
 | `ctx.sessions.onRunEvent(cb)` | 订阅会话运行事件（见 §4） |
+| `ctx.sessions.reveal(sessionFile)` | 把一段会话**只读预览**到主区域（见 §4.1） |
 | `ctx.log(...args)` | 带插件前缀的日志 |
 
 选 `runAgentPrompt` 还是 `sessions.send`：前者适合「定时跑一段无关的活」，后者适合「结果必须回到这段对话里」。
@@ -154,6 +155,25 @@ off()
 
 用途是决定投递语义（会话忙时排队而不是插话），**不是**判断「要不要投递」——`send` 自己处理忙闲。
 注意重载后旧订阅会失效，别缓存 `off` 到磁盘。
+
+## 4.1 `ctx.sessions.reveal`
+
+```ts
+const opened = await ctx.sessions.reveal('/abs/path/.../run-0/session.jsonl')
+```
+
+把一段会话**只读预览**到主区域（不绑定 worker、没有输入框、不能发提示词）。用途是
+「这条记录背后有一段会话，我想看看它当时在干什么」——子代理的 `run-<i>/session.jsonl`
+是典型目标。
+
+- **只接受绝对路径 + `.jsonl`**。文件不存在、给的是目录或别的格式时返回 `false` 且
+  什么都不做，不抛错（这类会话多来自一次性 run，过期是常态）。
+- `true` 只代表「路径可用，已发起导航」，不代表用户真的停留——导航是异步的，用户可能
+  立刻切走。拿它决定要不要提示「会话已过期」，别拿它当 UI 状态。
+- 预览态**不接管会话**：用户想继续对话，得自己从侧栏切过去。插件能命令宿主「看一眼」，
+  不能命令宿主「接管」。这条由宿主强制：预览时输入框禁用、发送与 fork/rewind 一并被挡
+  （store 的 `readOnlyPreviewFile`），插件不需要也不能改变这一点。
+- 目标会话还在跑时，预览内容会**自己增长**（宿主监听会话文件）；这与是否绑定 worker 无关。
 
 ## 5. 工具（`tools[]`）
 
@@ -211,7 +231,7 @@ invoke('tool.execute', { name, args, sessionFile, cwd, signal })
 | `pi.invoke(method, params?, { timeoutMs? })` | 调 main 侧 `methods[method]`，返回 Promise。默认 **10s 超时**，超时 reject 且 `error.code === 'timeout'`；`timeoutMs: 0` 关闭（慎用） |
 | `pi.on('theme'\|'settings'\|'context'\|'dispose', fn)` | 订阅宿主推送，返回取消函数 |
 | `pi.settings` / `pi.context` / `pi.theme` / `pi.panelId` | 最近一次的值（只读快照，每次推送换引用） |
-| `pi.openPanel(panelId)` | 请求宿主切到某个右栏面板并展开，resolve 成 `boolean` |
+| `pi.openPanel(panelId)` | 请求宿主切到某个右栏面板并展开，resolve 成 `boolean`。`panelId` 写**本插件** `panels[].id`（宿主补全成 `plugin:<插件>:<面板>`）；带命名空间的完整 id 也收 |
 | `pi.setContentHeight(h)` | **仅 sessionBars**：上报自身高度，`0` = 收起，上限 400px |
 | `pi.forwardKey(key, { mod })` | 把 Esc / Cmd-K 转给宿主（iframe 有焦点时宿主收不到 keydown） |
 | `pi.dispose()` | 主动关闭通道（一般不用；面板卸载由宿主触发） |
@@ -303,7 +323,8 @@ ctx.ui.inbox({
   title: '定时任务：每日简报',        // 一行，宿主会截断
   body: '有变化：3 条新评论',          // 一两句摘要，详情归插件视图
   tone: 'success',                    // info | success | warn | error（只影响图标与颜色）
-  target: { pluginId: 'scheduler', viewId: 'main' },  // 点开跳到哪个插件的哪个视图
+  sessionFile: '/abs/path/session.jsonl',             // 这条记录属于哪段会话
+  target: { pluginId: 'scheduler', panelId: 'main' }, // 点开顺手亮哪个面板（可选）
   dedupeKey: 'task-123',              // 同一个 key 只留最新一条
 })
 ```
@@ -318,9 +339,25 @@ ctx.ui.inbox({
 - `dedupeKey` 命中时**替换旧条目并重新变未读**。高频任务（每分钟一次）必须给：
   否则 200 格信箱会被同一个任务刷满，红点也永远消不掉。
 
+**落点顺序（重要）**：`sessionFile` → `panelId` → `viewId`。
+
+| 传了什么 | 点开之后 |
+| --- | --- |
+| `sessionFile` | 切到那段会话（侧栏里没有它就退化成**只读预览**，子代理的子会话走这条） |
+| `sessionFile` + `panelId` | 切会话，再亮右栏面板——**右栏跟着会话走，这是推荐形态** |
+| `sessionFile` + `viewId` | 只切会话，`viewId` 被忽略（否则插件页立刻顶掉刚打开的会话） |
+| 只有 `panelId` | 只亮右栏，对话不动（适合与具体会话无关的全局面板） |
+| 只有 `viewId` | 切中央插件视图 |
+| 都没有 | 条目点不开，宿主提示「无法打开」 |
+
+`sessionFile` 还决定**未读**：用户正看着那段会话时条目直接算已读（与完成卡同规则）。
+右栏面板是会话的附属物，所以想表达「某会话的子代理跑完了」，正确姿势是
+`sessionFile` + `panelId`，而不是只给面板 id。
+
 **边界**：`title` 为空时宿主直接丢弃（只打日志），不抛错——后台执行路径不该因为
-一次信箱写入失败而中断。点击行为是「切中央视图」，**不带参数**：定位到具体那条记录
-要靠插件自己的未读标记（`snapshot.unreadByTask` 那类），别指望宿主把 runId 传进去。
+一次信箱写入失败而中断。会话文件已不存在时点击提示「会话已不存在」。
+定位到具体那条记录仍要靠插件自己的未读标记（`snapshot.unreadByTask` 那类），
+别指望宿主把 runId 传进去。
 
 
 ## 7. 已知限制

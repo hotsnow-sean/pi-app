@@ -1,12 +1,17 @@
 import { ipcMain, BrowserWindow } from 'electron'
+import type { WebContents } from 'electron'
 import type { AppEvent } from '@shared/app-events'
 import { z, type ZodSchema } from 'zod'
 
 /** Documented JSON invoke shape from preload (see doc/IPC-CONTRACTS.md). */
 export type IpcInvokeBody = Record<string, unknown>
 
+/**
+ * `sender` 只有需要「记住是谁在订阅 / 只回给发起方」的通道才用（如会话文件监听）。
+ * 绝大多数 handler 忽略它——加它是可选第二参，现有实现无需改动。
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type IpcHandlerFn = (request: any) => Promise<any>
+export type IpcHandlerFn = (request: any, sender?: WebContents) => Promise<any>
 
 const handlers = new Map<string, IpcHandlerFn>()
 
@@ -34,7 +39,7 @@ export function registerHandler(channel: string, handler: IpcHandlerFn): void {
   ipcMain.handle(channel, async (_event, request) => {
     const started = PERF_TRACE ? Date.now() : 0
     try {
-      const pending = handler(request as IpcInvokeBody)
+      const pending = handler(request as IpcInvokeBody, _event.sender)
       if (!PERF_TRACE) return await pending
       const sync = Date.now() - started
       const result = await pending

@@ -329,9 +329,13 @@ export async function hydrateSessionView(
   try {
     // A running turn can persist a fuller reply before its terminal event reaches us.
     // Disk-first IPC — never spawns a worker.
+    //
+    // 预览态（`bindWorker === false`）必须绕过切片缓存：它没有事件流，磁盘是唯一真相，
+    // 而这份缓存 TTL 是 2 分钟。实测症状就是「跑着的子代理整段不动，到两分钟才跳一次」。
+    const previewing = options?.bindWorker === false
     const diskAuthoritative = isSessionDiskAuthoritative(sessionKey)
     const hist = await fetchSessionHistoryTail(sessionKey, 80, {
-      bypassCache: !hadRows || diskAuthoritative || sessionTurnActive(sessionKey),
+      bypassCache: previewing || !hadRows || diskAuthoritative || sessionTurnActive(sessionKey),
     })
     if (navToken != null && !assertSessionNavigation(navToken)) {
       restorePhaseIfUnfinished()

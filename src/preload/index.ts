@@ -10,6 +10,7 @@ const EXT_UI_CHANNEL = 'ipc:extension-ui-request'
 const EXT_UI_DISMISS_CHANNEL = 'ipc:extension-ui-dismiss'
 const APP_UPDATE_CHANNEL = 'ipc:app-update-available'
 const APP_UPDATE_DOWNLOAD_PROGRESS_CHANNEL = 'ipc:app-update-download-progress'
+const SESSION_TAIL_CHANNEL = 'ipc:session-tail'
 
 const api = {
   customThemeDisabled: process.argv.includes(CUSTOM_THEME_DISABLED_RENDERER_ARGUMENT),
@@ -94,6 +95,19 @@ const api = {
     const handler = (_event: unknown, data: { cwd: string }): void => callback(data)
     ipcRenderer.on('ipc:git-workspace-changed', handler)
     return () => ipcRenderer.off('ipc:git-workspace-changed', handler)
+  },
+
+  /**
+   * 预览中的会话文件有新内容。只报「变了 + 现在多大」，内容由 renderer 自己重读
+   * （jsonl → 时间线的归一化只存在于那一条链路里，不在这里复制一份）。
+   */
+  onSessionTail(callback: (payload: { sessionFile: string; size: number; truncated: boolean }) => void): () => void {
+    const handler = (
+      _event: unknown,
+      data: { sessionFile: string; size: number; truncated: boolean },
+    ): void => callback(data)
+    ipcRenderer.on(SESSION_TAIL_CHANNEL, handler)
+    return () => ipcRenderer.off(SESSION_TAIL_CHANNEL, handler)
   },
 
   onCloseRequested(callback: (info: { isStreaming: boolean; terminals?: number }) => void): () => void {

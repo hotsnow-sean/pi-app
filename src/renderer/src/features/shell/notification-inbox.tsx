@@ -7,6 +7,9 @@ import { useUIStore } from '@renderer/stores/ui-store'
 import { listAttentionSessions } from '@renderer/lib/session-attention'
 import { activateWorkspace, switchSessionInPlace } from '@renderer/lib/activate-workspace'
 import { sessionFilesEqual } from '@renderer/lib/session-file-key'
+import { resolveInboxTargetAction, planInboxJump, isDerivedChildSessionFile } from '@renderer/lib/plugin-inbox-target'
+import { pluginPanelGlobalId } from '@shared/plugin-manifest'
+import { workspacePathsEqual } from '@shared/workspace-path'
 import { SessionAttentionDot } from '@renderer/features/workspace/session-attention-dot'
 import { cn } from '@renderer/lib/utils'
 import { ShellPopover } from './shell-popover'
@@ -20,8 +23,13 @@ type InboxItem = {
   copy?: { title?: string; body?: string }
   unread?: boolean
   createdAt?: number
-  /** 插件投递的条目：点开跳插件视图（与 sessionFile 二选一） */
-  target?: { pluginId: string; viewId: string }
+  /**
+   * 插件投递的条目：点开先回到 `sessionFile`（切会话或只读预览），
+   * 再按 `target` 亮出右栏面板 / 中央视图。宿主完成卡没有这两个字段。
+   */
+  target?: { pluginId: string; viewId?: string; panelId?: string }
+  /** 来源插件 id；有它就是插件条目（空字符串也算插件条目） */
+  pluginId?: string
   /** 插件条目的观感；完成卡不带（按 outcome 推导） */
   tone?: 'info' | 'success' | 'warn' | 'error'
 }
@@ -79,6 +87,17 @@ function sameInboxItems(previous: unknown, next: unknown): boolean {
 function readInboxItems(res: unknown): InboxItem[] | null {
   const raw = (res as { items?: unknown } | null | undefined)?.items
   return Array.isArray(raw) ? (raw as InboxItem[]) : null
+}
+
+/**
+ * 只读预览一段会话（按需加载）。
+ *
+ * 只有「目标会话不在侧栏列表里」时才走这条（子代理的子会话），所以按需引入——
+ * 静态引入会把整条会话导航链塞进首屏 chunk（`app.tsx` 处理 reveal 事件时也是动态导入）。
+ */
+async function previewSession(sessionFile: string): Promise<boolean> {
+  const { revealSessionPreview } = await import('@renderer/lib/reveal-session')
+  return revealSessionPreview(sessionFile)
 }
 
 export function NotificationInbox() {
@@ -177,30 +196,100 @@ export function NotificationInbox() {
   }
 
   /**
-   * 插件条目：切中央视图而不是切会话。
+   * 插件条目：先回到产生这条记录的会话，再看要不要亮插件面板。
    *
-   * 信箱与插件视图是两套东西（前者是「发生过什么」，后者是「现在怎么样」），
-   * 所以点开只负责把人送到插件页；定位到具体那条记录要靠插件自己的未读标记。
+   * 为什么会话优先：右栏面板是**会话的附属物**（内容跟着当前会话变）。只亮面板不切
+   * 会话，用户看到的是「别的会话的面板」，比不跳更迷惑。所以插件的正确用法是给条目
+   * 带 `sessionFile`，宿主切过去，右栏自然跟到那段对话。
+   *
+   * 会话找不到侧栏条目时退化成**只读预览**而不是报错：子代理的子会话（`run-<i>/session.jsonl`）
+   * 本来就不在侧栏列表里，但它确实是能读的一段会话。
    */
-  const openPluginView = async (item: InboxItem) => {
+  const jumpToSessionFile = async (sessionFile: string): Promise<'switched' | 'previewed' | 'missing'> => {
+    const match = sessions.find((s) => sessionFilesEqual(s.sessionFile, sessionFile))
+    if (match) {
+      // 会话行上的 workspaceId 可能缺（未加载的工作区）：用当前工作区兜底，
+      // 都没有就退回只读预览，别把用户扔进一个空工作区。
+      const workspace = match.workspaceId || currentWorkspace
+      if (!workspace) return (await previewSession(sessionFile)) ? 'previewed' : 'missing'
+      // 路径比较必须走归一化：`C:\x` 与 `c:/x` 在这里是同一个工作区，
+      // 用 `!==` 会误判成「跨项目」，白跑一次 workspace.open（还会闪一下）。
+      if (workspacePathsEqual(workspace, currentWorkspace)) await switchSessionInPlace(match.sessionId, sessionFile)
+      else await activateWorkspace(workspace, { sessionId: match.sessionId, sessionFile })
+      return 'switched'
+    }
+    // 不在当前项目的会话列表里。两种可能，处理方式相反：
+    // - 子代理的子会话（run-<i>/session.jsonl）：本来就不属于侧栏，只读预览。
+    // - 别的项目里的普通会话：应当切项目 + 正常打开（有输入框、侧栏跟着高亮）。
+    //   早先这里一律降级成预览，于是「中间回到了 A，左侧高亮没动、也没输入框」。
+    if (isDerivedChildSessionFile(sessionFile)) {
+      return (await previewSession(sessionFile)) ? 'previewed' : 'missing'
+    }
+    const prepared = (await ipcClient
+      .invoke('session.prepare', { sessionFile, bind: false })
+      .catch(() => null)) as
+      | { sessionId?: string | null; sessionFile?: string; workspaceId?: string | null }
+      | null
+    if (prepared?.sessionId && prepared.workspaceId) {
+      await activateWorkspace(prepared.workspaceId, {
+        sessionId: prepared.sessionId,
+        sessionFile: prepared.sessionFile || sessionFile,
+      })
+      return 'switched'
+    }
+    return (await previewSession(sessionFile)) ? 'previewed' : 'missing'
+  }
+
+  const openPluginItem = async (item: InboxItem) => {
     const target = item.target
-    if (!target) return
     setActionError(null)
     setPending(item.notificationId)
     try {
-      setCenterView({ kind: 'plugin', pluginId: target.pluginId, viewId: target.viewId })
+      const store = useUIStore.getState()
+      // 面板 id 是插件 manifest 里的**局部** id，目录里存的是 `plugin:<插件>:<面板>`。
+      // 解析结果必须是完整 id：直接拿局部 id 去 setActivePanel，右栏会亮但停在别的
+      // 页签（prefs 里查不到 → 回落首个可用面板），用户看到的是「没切过去」。
+      const action = resolveInboxTargetAction(target, (panelId) => {
+        if (!target) return null
+        const globalId = pluginPanelGlobalId(target.pluginId, panelId)
+        return store.rightPanelCatalog.some((c) => c.id === globalId) ? globalId : null
+      })
+      const plan = planInboxJump(!!item.sessionFile, action)
+      if (plan.empty) {
+        // 面板拼错、没视图、又没有可回的会话：别静默关掉弹窗，让用户知道这条点不开。
+        // 文案不能复用「无法打开该会话」——这里根本没涉及会话，会把人带偏。
+        setActionError(t('common:notification.pluginTargetMissing'))
+        return
+      }
+      if (plan.jumpSession && item.sessionFile) {
+        const hop = await jumpToSessionFile(item.sessionFile)
+        if (hop === 'missing') {
+          // 文件没了就是真没了：明确告诉用户，别静默关掉让人以为跳过去了
+          setActionError(t('common:notification.sessionGone'))
+          return
+        }
+      }
+      if (plan.panelId) {
+        store.setActivePanel(plan.panelId)
+        store.revealRightPanel()
+      }
+      if (plan.center) {
+        setCenterView({ kind: 'plugin', pluginId: plan.center.pluginId, viewId: plan.center.viewId })
+      }
       await ipcClient.invoke('notifications.markRead', { id: item.notificationId })
       await load()
       close()
     } catch {
-      setActionError(t('common:notification.openFailed'))
+      setActionError(t('common:notification.pluginTargetMissing'))
     } finally {
       setPending(null)
     }
   }
 
   const openItem = async (item: InboxItem) => {
-    if (item.target) await openPluginView(item)
+    // 插件条目统一走上面的分支：它的 sessionFile 可能指向一段不在侧栏里的子会话，
+    // 不能交给宿主的完成卡跳转逻辑。`target` 也算判据——老宿主的条目没有 pluginId。
+    if (item.target || item.pluginId != null) await openPluginItem(item)
     else await openSession(item.workspaceId, item.sessionId, item.sessionFile, item.notificationId)
   }
 

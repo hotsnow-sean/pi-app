@@ -6,7 +6,7 @@ import {
   type CompletionOutcome,
   type CompletionPreviewMode,
 } from '@shared/completion-preview'
-import type { PluginInboxItem } from '@shared/plugin-context'
+import type { PluginInboxItem, PluginInboxTarget } from '@shared/plugin-context'
 import { normalizeSessionFilePath, sessionFilePathsEqual } from '@shared/session-file-path'
 
 export type CompletionNotificationSettings = {
@@ -38,13 +38,21 @@ export type CompletionCard = {
   unread?: boolean
   createdAt?: number
   /**
-   * 插件投递的条目：点击时跳插件视图而不是切会话。
-   * 与 `sessionFile` 是两条互斥的落点（`sessionFile` 是「回到那段对话」，
-   * `target` 是「打开那个插件页」）。
+   * 插件投递的条目额外带的落点。
+   *
+   * 与 `sessionFile` **不是互斥**了：插件条目常常两者都要——先回到产生这条记录的
+   * 那段会话，再顺手亮出右栏面板。`sessionFile` 是「回到哪」，`target` 是「看什么」。
    */
-  target?: { pluginId: string; viewId: string }
+  target?: PluginInboxTarget
   /** 插件条目的观感；宿主自己产生的完成卡不带（按 outcome 推导） */
   tone?: 'info' | 'success' | 'warn' | 'error'
+  /**
+   * 插件投递的条目：来源插件 id。
+   *
+   * 渲染层据此把「插件条目」与「宿主完成卡」分开处理：插件条目可能指向一段
+   * 不在侧栏列表里的会话（子代理的子会话），跳转要允许退化成只读预览。
+   */
+  pluginId?: string
 }
 
 export type CompletionDeliverer = (card: CompletionCard) => void
@@ -189,9 +197,13 @@ export function createCompletionNotificationController(deps: CompletionControlle
       : `p-${deps.now()}-${++seq}`
     const existing = inbox.findIndex((row) => row.notificationId === notificationId)
     if (existing >= 0) inbox.splice(existing, 1)
+    // 归属会话：插件条目也可能「属于某段对话」，带上它才能复用未读判定
+    // （用户正看着那段会话时不该再亮红点）。
+    const sessionFile = sessionKey(item.sessionFile) || undefined
     rememberInbox({
       notificationId,
       workspaceId: '',
+      sessionFile,
       // outcome 只被渲染层用来挑图标/颜色；插件条目以 tone 为准
       outcome: item.tone === 'error' ? 'failed' : 'success',
       copy: {
@@ -206,6 +218,7 @@ export function createCompletionNotificationController(deps: CompletionControlle
       timeoutMs: 0,
       sound: false,
       tone: item.tone,
+      pluginId,
       target: item.target,
     })
   }

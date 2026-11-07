@@ -67,6 +67,8 @@ export function createSessionSlice(set: StoreSet): SessionSlice {
           pendingNewSessionPlaceholder: false,
           currentSessionId: sessionId,
           historySessionFile: sessionFile,
+          // 草稿提升成真实会话＝可写；预览标记必须跟着走，否则新会话会继承上一个视图的只读
+          readOnlyPreviewFile: null,
           historyTotalCount: 0,
           historyLoadedCount: 0,
           rewindTreeNodes: [],

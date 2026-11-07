@@ -147,6 +147,8 @@ export const IPC_INVOKE_CHANNELS = [
   'ipc:session.setEphemeralDraft',
   'ipc:session.setPendingBind',
   'ipc:session.setVisible',
+  'ipc:session.tail.subscribe',
+  'ipc:session.tail.unsubscribe',
   'ipc:session.tree',
   'ipc:settings.get',
   'ipc:settings.set',

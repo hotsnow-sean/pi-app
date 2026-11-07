@@ -147,6 +147,41 @@ export interface PluginWidgetEvent extends AppEventBase {
   bar: PluginComposerBarState | null
 }
 
+/**
+ * 插件请求宿主打开一段会话（只读预览，不绑定 worker）。
+ *
+ * 为什么走 app event 而不是 invoke：这是 main → renderer 的单向指令，插件那边
+ * 不需要知道结果（它自己的面板还在，切会话不影响它）。反过来让 renderer 轮询
+ * 或让插件 iframe 直接调宿主导航，都要求插件理解宿主 UI 状态，越界了。
+ *
+ * `sessionFile` 是唯一入参：会话 id 由 renderer 侧的 `session.prepare` 换取，
+ * main 不替它编一个——会话列表可能在别的窗口 / 别的设备上已经变了。
+ */
+export interface PluginRevealSessionEvent extends AppEventBase {
+  type: 'plugin_reveal_session'
+  pluginId: string
+  /** 要预览的会话文件绝对路径 */
+  sessionFile: string
+}
+
+/**
+ * 插件请求宿主**切到**一段会话（`ctx.sessions.activate` 的落点）。
+ *
+ * 与 `plugin_reveal_session` 的区别：reveal 是「看一眼」（恒为只读预览），activate
+ * 是「回去」——目标会话在当前工作区侧栏里就正常激活（可写、绑 worker），不在
+ * （比如子代理的子会话、跨工作区）才退化为只读预览。插件面板的「返回主会话」
+ * 就是它的第一个消费者。
+ *
+ * 校验与静默语义与 reveal 相同：路径不合规/文件不存在时 main 直接吞掉，renderer
+ * 不该收到一次注定失败的导航。
+ */
+export interface PluginActivateSessionEvent extends AppEventBase {
+  type: 'plugin_activate_session'
+  pluginId: string
+  /** 要切到的会话文件绝对路径 */
+  sessionFile: string
+}
+
 // SDK 安装进度（设置页 UI 用，与会话无关，不继承 AppEventBase）
 export interface SdkInstallProgressEvent {
   type: 'sdk-install-progress'
@@ -189,6 +224,8 @@ export type AppEvent =
   | CompletionEvent
   | ExtensionWidgetEvent
   | PluginWidgetEvent
+  | PluginRevealSessionEvent
+  | PluginActivateSessionEvent
   | SdkInstallProgressEvent
   | SdkRuntimeChangedEvent
   | AdapterCatalogChangedEvent

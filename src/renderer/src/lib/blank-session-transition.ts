@@ -49,6 +49,8 @@ function blankSessionPatch(state: UIState): Partial<UIState> {
     historyLoading: false,
     composerWidget: null,
     subagentSessionGroup: null,
+    // 空白会话不是预览：不清掉的话，之后碰巧打开同一个文件仍会被判成只读
+    readOnlyPreviewFile: null,
     workerLiveSnapshot: { sessionId: null, sessionFile: null, status: 'idle' },
     runState: blankRunState(state),
   }

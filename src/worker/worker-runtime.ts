@@ -28,6 +28,7 @@ import { capabilitiesExtension } from './worker-capabilities.js'
 import { modelRoutersExtension } from './worker-model-routers.js'
 import { browserToolsExtension } from './worker-browser-tools.js'
 import { pluginToolsExtension, setPluginToolSessionResolver } from './worker-plugin-tools.js'
+import { pluginAgentExtensions } from './worker-plugin-agent-extensions.js'
 
 
 
@@ -237,6 +238,9 @@ function buildRuntimeFactory(): CreateAgentSessionRuntimeFactory {
           browserToolsExtension,
           pluginToolsExtension,
           modelRoutersExtension(agentDir),
+          // 插件会话扩展放最后：让宿主/内置扩展先占住工具名与命令名。pi 的重名处理是
+          // 先到先得，插件来晚了只会被跳过（记一条 warning），反过来则会顶掉宿主能力。
+          ...pluginAgentExtensions(),
         ],
         extensionsOverride: (result) => decorateQuestionnaireTools(result, cwd),
         skillsOverride: applySkillsOverride as never,

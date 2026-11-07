@@ -22,6 +22,8 @@
   "previewBackgroundRunning": "后台运行中",
   "subagentPreviewReadOnly": "子 Agent 会话为只读，不能发送消息",
   "subagentPreviewBanner": "正在查看子 Agent 会话；如需发送消息，请返回父会话。",
+  "readOnlyPreviewPlaceholder": "只读预览，不能发送消息",
+  "readOnlyPreviewBanner": "正在只读预览这段会话；要发消息请在左侧打开一个会话。",
   "joinQueue": "加入队列 (follow-up)",
   "addFile": "添加文件",
   "dropToAdd": "松手添加",

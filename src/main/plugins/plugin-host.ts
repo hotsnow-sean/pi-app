@@ -7,6 +7,7 @@ import { discoverPlugins, findPlugin, setPluginEnabled } from './plugin-manager'
 import { getPluginSettings, onPluginSettingsChanged } from './plugin-settings'
 import { askInHost, cancelPluginUIRequests } from './plugin-ui'
 import { clearPluginComposerBars, publishPluginComposerBar } from './plugin-composer-bar'
+import { publishPluginActivateSession, publishPluginRevealSession } from './plugin-reveal-session'
 import type { PluginComposerBarState } from '@shared/plugin-composer-bar'
 import type {
   PluginAgentPromptResult,
@@ -281,6 +282,26 @@ function buildContext(pluginId: string, disposers: Array<() => void>): PluginCon
       ): (() => void) => {
         if (typeof handler !== 'function') throw new Error('sessions.onRunEvent: handler required')
         return track(workerManager.onSessionRunEvent(handler))
+      },
+      /**
+       * 只读预览一段会话到主区域。
+       *
+       * 失败静默（不抛错）：会话文件多来自一次性 run，过期是常态，插件在轮询里
+       * 顺手 reveal 时不该因为目标已删而中断整轮。返回值只表达「路径可用」，
+       * 供插件决定要不要提示「会话已过期」。
+       */
+      reveal: async (sessionFile: string): Promise<boolean> => {
+        return publishPluginRevealSession(pluginId, sessionFile)
+      },
+      /**
+       * 切到一段会话：在当前工作区侧栏就正常激活（可写、绑 worker），不在
+       * （子会话、跨工作区）才退化为只读预览。
+       *
+       * 与 reveal 的分工：reveal 是「看一眼」，activate 是「回去」——插件面板的
+       * 「返回主会话」用它。校验与静默语义同 reveal。
+       */
+      activate: async (sessionFile: string): Promise<boolean> => {
+        return publishPluginActivateSession(pluginId, sessionFile)
       },
     },
     log: (...args: unknown[]): void => console.log(`[plugin:${pluginId}]`, ...args),

@@ -16,6 +16,7 @@ import { getAgentRuntimeConfig } from './wsl/runtime-config'
 import { resolveWslActiveSdk } from './wsl/sdk-resolve'
 import { syncWorkerBundleToWsl } from './wsl/worker-host'
 import { resolveUtilityEntry } from './utility-entry-path'
+import { pluginAgentExtensionDescriptors } from './plugins/plugin-agent-extensions'
 
 export const extensionUiDialogSource = new Map<string, WorkerSlot>()
 
@@ -426,7 +427,11 @@ export async function forkWorkerForCwd(
     }
   })
   slot.initPromise = initPromise
-  transport.postMessage({ type: 'init', cwd: workerCwd, sdkPath })
+  // 插件会话扩展（agent.mjs）随 init 一起下发：会话 runtime 就是被 init 建起来的，
+  // 之后没有第二个注入时机。WSL 模式下插件装在 Windows 侧 userData，WSL 里的 worker
+  // 读不到那个路径，传过去只会换来一串 ENOENT —— 直接不给。
+  const pluginAgentExtensions = runtime.mode === 'wsl' ? [] : pluginAgentExtensionDescriptors()
+  transport.postMessage({ type: 'init', cwd: workerCwd, sdkPath, pluginAgentExtensions })
   return { slot, init: initPromise }
 }
 

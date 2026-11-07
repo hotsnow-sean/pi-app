@@ -171,8 +171,7 @@ describe('Notification inbox feedback', () => {
     expect(screen.queryByText('common:notification.empty')).not.toBeInTheDocument()
   })
 
-  it('routes a plugin item to its view and marks it read', async () => {
-    useUIStore.setState({ sessionAttention: {} })
+  it('routes a plugin item to its view and marks it read', async () => {    useUIStore.setState({ sessionAttention: {} })
     const item = { notificationId: 'p:scheduler:task-1', workspaceId: '', outcome: 'success', unread: true, tone: 'success', target: { pluginId: 'scheduler', viewId: 'main' }, copy: { title: '定时任务：每日简报', body: '有变化：3 条新评论' } }
     mocks.invoke.mockImplementation(async (method: string) => method === 'notifications.inbox' ? { items: [item] } : { ok: true })
     render(<NotificationInbox />)
@@ -180,5 +179,35 @@ describe('Notification inbox feedback', () => {
     fireEvent.click(await screen.findByText('定时任务：每日简报'))
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('notifications.markRead', { id: 'p:scheduler:task-1' }))
     expect(useUIStore.getState().centerView).toEqual({ kind: 'plugin', pluginId: 'scheduler', viewId: 'main' })
+  })
+
+  // 实测反馈：只亮右栏面板时用户仍停在别的会话里，看到的是「别的会话的子代理」。
+  // 所以插件条目带 sessionFile 时必须先回会话，右栏跟着会话走。
+  it('returns to the item session before revealing the panel', async () => {
+    useUIStore.setState({
+      sessionAttention: {},
+      centerView: { kind: 'chat' },
+      rightPanelCatalog: [{ id: 'plugin:scheduler:main' }] as never,
+    })
+    const item = {
+      notificationId: 'p:scheduler:task-2',
+      workspaceId: '',
+      outcome: 'success',
+      unread: true,
+      tone: 'info',
+      pluginId: 'scheduler',
+      sessionFile: session.sessionFile,
+      target: { pluginId: 'scheduler', panelId: 'main' },
+      copy: { title: '子代理完成', body: '有变化：2 个任务' },
+    }
+    mocks.invoke.mockImplementation(async (method: string) =>
+      method === 'notifications.inbox' ? { items: [item] } : { ok: true })
+    render(<NotificationInbox />)
+    fireEvent.click(screen.getByRole('button', { name: 'common:notification.inbox' }))
+    fireEvent.click(await screen.findByText('子代理完成'))
+    await waitFor(() => expect(mocks.switchSession).toHaveBeenCalledWith(session.sessionId, session.sessionFile))
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('notifications.markRead', { id: 'p:scheduler:task-2' }))
+    // 会话优先：不能把刚切过去的会话又用插件页顶掉
+    expect(useUIStore.getState().centerView).not.toEqual({ kind: 'plugin', pluginId: 'scheduler', viewId: 'main' })
   })
 })

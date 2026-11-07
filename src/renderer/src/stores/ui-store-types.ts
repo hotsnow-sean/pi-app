@@ -173,6 +173,19 @@ export interface UIState {
   setHistoryLoading: (v: boolean) => void
   subagentSessionGroup: SubagentSessionGroup | null
   setSubagentSessionGroup: (group: SubagentSessionGroup | null) => void
+  /**
+   * 当前视图是**只读预览**时，被预览的那个会话文件；正常打开的会话为 null。
+   *
+   * 与 `subagentSessionGroup.previewSessionFile` 的区别：那个只在「从时间线的子代理卡片
+   * 点进来、且带着兄弟会话导航条」时才有值。但预览还有别的来源——插件
+   * `ctx.sessions.reveal`、信箱条目退回只读——它们和当前时间线毫无关系，不该为了拿
+   * 「只读」这个观感去伪造一个兄弟组（会顺带在侧栏列出无关会话）。
+   *
+   * 由打开会话的统一入口（`openExistingSessionView`）维护：预览置值、绑定 worker 清空。
+   * 判定一律走 `isReadOnlyPreviewSession`，别直接比字符串（Windows 大小写/分隔符）。
+   */
+  readOnlyPreviewFile: string | null
+  setReadOnlyPreviewFile: (sessionFile: string | null) => void
   timelineItems: TimelineItem[]
   streamingAssistantId: string | null
   appendTimeline: (item: TimelineItem) => void

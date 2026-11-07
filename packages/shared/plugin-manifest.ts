@@ -141,6 +141,26 @@ export const pluginToolContributionSchema = z.object({
 
 export type PluginToolContribution = z.infer<typeof pluginToolContributionSchema>
 
+/**
+ * pi extension 入口（`agent.mjs`）：插件在**会话进程**里跑的那部分。
+ *
+ * 与 main.mjs 的分工：main.mjs 在 main 进程常驻（有 ctx.ui / storage / 会话投递），
+ * agent.mjs 在每个会话的 worker 里被当作 pi extension 注入（能读 eventBus、能注册工具、
+ * 能挂事件钩子）。两者之间没有现成通道——要通信只能借文件或主进程转发，插件自己安排。
+ *
+ * 为什么值得多这一层：有些数据只存在于会话进程内（扩展的 eventBus、SDK 内部状态），
+ * main 进程根本够不到；把它们搬出来是插件自己的事，宿主只负责把代码送进去。
+ */
+export const pluginAgentContributionSchema = z.object({
+  /** 入口文件，相对插件目录；只接受 JS 模块（.mjs/.js/.cjs） */
+  entry: z
+    .string()
+    .default('agent.mjs')
+    .refine((v) => /\.(mjs|cjs|js)$/.test(v), 'agent entry must be a .mjs/.js/.cjs file'),
+})
+
+export type PluginAgentContribution = z.infer<typeof pluginAgentContributionSchema>
+
 export const pluginManifestSchema = z.object({
   /** 插件 id，全局唯一，小写字母数字连字符 */
   id: z.string().regex(PLUGIN_ID_PATTERN, 'plugin id must be lowercase alphanumeric/dash'),
@@ -158,6 +178,8 @@ export const pluginManifestSchema = z.object({
     .optional(),
   /** main 进程入口，相对插件目录，默认 main.mjs；可省略（纯 UI 插件） */
   main: z.string().optional(),
+  /** 会话进程入口（pi extension）：省略 = 该插件不往会话里注入任何东西 */
+  agent: pluginAgentContributionSchema.optional(),
   panels: z.array(pluginPanelContributionSchema).default([]),
   /** 中央视图：侧栏「应用」入口 + 中央内容区面板 */
   views: z.array(pluginViewContributionSchema).default([]),
