@@ -193,6 +193,21 @@ body {
   font-family: var(--mono); font-size: 12px; color: var(--text); max-height: 260px; overflow: auto;
 }
 
+.memory-block { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); overflow: hidden; margin-top: 8px; }
+.memory-count { margin-left: 8px; font-size: 11px; color: var(--text-2); }
+.memory-content { padding: 0 12px 12px; }
+.memory-body {
+  margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono);
+  font-size: 12px; color: var(--text); max-height: 260px; overflow: auto;
+}
+.memory-editor {
+  display: block; width: 100%; box-sizing: border-box; min-height: 180px; resize: vertical;
+  font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--text);
+  background: var(--bg, transparent); border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+}
+.memory-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.memory-hint { margin-top: 8px; font-size: 11px; color: var(--text-2); line-height: 1.6; }
+
 .detail-meta {
   display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline;
   color: var(--text-2); font-size: 11.5px; margin: 10px 0 4px;

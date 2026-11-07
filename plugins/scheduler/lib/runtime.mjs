@@ -34,6 +34,14 @@ export const OUTPUT_LIMIT = 16_384
 export const PREVIEW_CHARS = 120
 /** 注入下次 prompt 的基线长度 */
 export const BASELINE_CHARS = 600
+/** 任务记忆：单份文件总字数上限、备注保留字数、执行记录保留条数/每条字数、注入条数 */
+export const MEMORY_MAX_CHARS = 6_000
+export const MEMORY_NOTES_CHARS = 800
+export const MEMORY_RECORD_LINES = 24
+export const MEMORY_RECORD_CHARS = 160
+export const MEMORY_INJECT_LINES = 8
+/** agent 单轮长期笔记的字数上限 */
+export const NOTE_MAX_CHARS = 300
 /** 压缩阈值：内存记录数下限（另一个条件是文件大小） */
 export const COMPACT_MIN_RUNS = 400
 export const RUNS_MAX_BYTES = 8 * 1024 * 1024
@@ -52,6 +60,10 @@ export const rt = {
   runsFile: '',
   /** 条件通知的信号文件目录 */
   signalDir: '',
+  /** 每任务一份的跨轮记忆文件目录 */
+  memoryDir: '',
+  /** agent 本轮长期笔记的临时目录（收尾由插件读走并入记忆） */
+  notesDir: '',
   /** 任务表（data.json 的内容）：load 时整体替换 */
   /** @type {{ schemaVersion: number, tasks: any[] }} */
   state: { schemaVersion: 2, tasks: [] },
@@ -116,4 +128,6 @@ export function resetRuntime() {
   rt.dataDir = ''
   rt.runsFile = ''
   rt.signalDir = ''
+  rt.memoryDir = ''
+  rt.notesDir = ''
 }

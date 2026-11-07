@@ -33,6 +33,7 @@ const {
   sendInbox,
   notifyQueueFull,
 } = await imp('notify')
+const { appendRunRecord, consumeNote } = await imp('memory')
 const { oneLine } = await imp('format')
 
 /** 单任务超时：设置项可调（长活如构建 15 分钟不够），上限 120 分钟 */
@@ -216,6 +217,20 @@ async function execute(item, gen) {
   task.runCount = (Number(task.runCount) || 0) + 1
   // 只在成功时更新基线：失败留下的半截结论/报错不能当成「上次的样子」
   if (ok) task.baseline = { text: output.slice(0, BASELINE_CHARS), at: run.finishedAt, runId: run.id }
+
+  // 跨轮记忆：插件兜底写一条执行记录（agent 什么都不写也会长），并把 agent
+  // 本轮可选的长期笔记并进「长期备注」。失败轮不带输出正文，避免半截结论污染
+  // 下一轮上下文——与「失败不更新基线」同一条原则。
+  const memorySummary = ok
+    ? fileSignal?.summary || oneLine(output, 100) || '（无正文）'
+    : token?.reason || '执行失败（未产出结论）'
+  appendRunRecord(task.id, task.name, {
+    at: run.finishedAt,
+    ok,
+    changed,
+    summary: oneLine(memorySummary, 140),
+    note: consumeNote(run.id),
+  })
   saveTasks()
   pruneRuns(task.id)
 

@@ -33,6 +33,17 @@ const {
   waitForRun,
 } = await imp('runs')
 const { enqueue } = await imp('engine')
+const {
+  readMemoryText,
+  writeMemoryText,
+  clearMemory: clearMemoryFile,
+  resetMemoryRecords,
+  mergeNote,
+  readMemory,
+  writeMemory,
+  memoryInfo,
+  USER_TEXT_LIMIT,
+} = await imp('memory')
 
 const POLICY_LABELS = {
   always: '每次都通知',
@@ -61,6 +72,7 @@ function sameName(a, b) {
  * @param {any} task
  */
 export function publicTask(task) {
+  const memory = memoryInfo(task.id)
   return {
     id: task.id,
     name: task.name,
@@ -81,6 +93,8 @@ export function publicTask(task) {
     notifyPolicy: task.notifyPolicy ?? null,
     notifyPolicyLabel: POLICY_LABELS[task.notifyPolicy ?? rt.settings.notifyPolicy] ?? POLICY_LABELS['on-change'],
     hasBaseline: !!task.baseline?.text,
+    hasMemory: memory.exists,
+    memoryRecords: memory.records,
   }
 }
 
@@ -203,8 +217,12 @@ const methods = {
       }
       rt.state.tasks.push(saved)
     }
-    // prompt 变了，旧基线就不能拿来比「有没有变化」——比的是两件事
-    if (saved.prompt !== undefined && saved.prompt !== normalized.prompt) saved.baseline = null
+    // prompt 变了，旧基线就不能拿来比「有没有变化」——比的是两件事。
+    // 记忆里的执行记录同样是关于旧目标的，一并清掉；长期备注是沉淀的事实，保留。
+    if (saved.prompt !== undefined && saved.prompt !== normalized.prompt) {
+      saved.baseline = null
+      if (saved.id) resetMemoryRecords(saved.id, normalized.name)
+    }
     saved.name = normalized.name
     saved.prompt = normalized.prompt
     saved.schedule = normalized.schedule
@@ -237,7 +255,47 @@ const methods = {
     if (!task) throw new Error('任务不存在')
     const runCount = removeRunsOfTask(task.id)
     removeTaskRecord(task.id)
+    clearMemoryFile(task.id)
     return { ok: true, runCount }
+  },
+
+  /** 记忆全文（编辑框用；不存在时给空模板，不落盘） */
+  async getMemory({ id }) {
+    const task = taskById(String(id || ''))
+    if (!task) throw new Error('任务不存在')
+    const text = readMemoryText(task.id, task.name)
+    return { id: task.id, name: task.name, text, chars: text.length, ...memoryInfo(task.id) }
+  },
+
+  /** 用户整份编辑记忆：解析两段 → 限幅 → 原子写回 */
+  async saveMemory({ id, text }) {
+    const task = taskById(String(id || ''))
+    if (!task) throw new Error('任务不存在')
+    const value = String(text ?? '')
+    if (value.length > USER_TEXT_LIMIT) throw new Error(`记忆内容过长（上限 ${USER_TEXT_LIMIT} 字）`)
+    writeMemoryText(task.id, task.name, value)
+    return { ok: true, text: readMemoryText(task.id, task.name) }
+  },
+
+  /** 只往「长期备注」追加几行（工具 sched_memory 用，不动执行记录） */
+  async appendMemory({ id, text }) {
+    const task = taskById(String(id || ''))
+    if (!task) throw new Error('任务不存在')
+    const value = String(text ?? '')
+    if (value.length > USER_TEXT_LIMIT) throw new Error(`内容过长（上限 ${USER_TEXT_LIMIT} 字）`)
+    const mem = mergeNote(readMemory(task.id), value)
+    writeMemory(task.id, task.name, mem)
+    return { ok: true, text: readMemoryText(task.id, task.name) }
+  },
+
+  /** 清空：记忆与基线一起归零，下一轮等同首次执行 */
+  async clearMemory({ id }) {
+    const task = taskById(String(id || ''))
+    if (!task) throw new Error('任务不存在')
+    clearMemoryFile(task.id)
+    task.baseline = null
+    saveTasks()
+    return { ok: true }
   },
 
   async setTaskEnabled({ id, enabled }) {

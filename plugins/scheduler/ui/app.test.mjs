@@ -176,6 +176,19 @@ function installHost() {
       result = { task: saved }
     } else if (method === 'nextRunPreview') {
       result = { nextRunAt: Date.now() + 7_200_000, scheduleLabel: '每天 09:00' }
+    } else if (method === 'getMemory') {
+      result = {
+        id: params.id,
+        name: '任务 t1',
+        text: '# 定时任务记忆：任务 t1\n\n## 长期备注\n- 基线 comments=0\n\n## 执行记录\n- 2026-11-07 11:02 成功 · 无变化 · 没新评论\n',
+        chars: 100,
+        exists: true,
+        records: 1,
+      }
+    } else if (method === 'saveMemory') {
+      result = { ok: true, text: params.text }
+    } else if (method === 'clearMemory') {
+      result = { ok: true }
     }
     realSetTimeout(() => {
       window.dispatchEvent(
@@ -349,6 +362,33 @@ describe('应用入口 UI', () => {
       () => calls.filter((call) => call.method === 'listRuns').some((call) => call.params.status === 'failed'),
       '按失败筛选',
     )
+  })
+
+  it('详情里可以展开、编辑、保存并清空任务记忆', async () => {
+    tasks = [task('t1', { hasMemory: true, memoryRecords: 1 })]
+    loadUi()
+    await waitFor(() => document.querySelector('#app .task-card'), '列表出现')
+    document.querySelector('#app .task-card').click()
+    await waitFor(() => document.querySelector('#app #btn-memory'), '记忆按钮出现')
+    expect(document.querySelector('#app .memory-count').textContent).toContain('1 条执行记录')
+
+    document.querySelector('#app #btn-memory').click()
+    await waitFor(() => document.querySelector('#app .memory-body'), '记忆正文出现')
+    expect(document.querySelector('#app .memory-body').textContent).toContain('基线 comments=0')
+
+    document.querySelector('#app #btn-memory-edit').click()
+    await waitFor(() => document.querySelector('#app #memory-draft'), '编辑框出现')
+    const draft = document.querySelector('#app #memory-draft')
+    draft.value = '## 长期备注\n- 人工补一条事实\n'
+    draft.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('#app #btn-memory-save').click()
+    await waitFor(
+      () => calls.some((call) => call.method === 'saveMemory' && call.params.text.includes('人工补一条事实')),
+      '保存记忆',
+    )
+
+    document.querySelector('#app #btn-memory-clear').click()
+    await waitFor(() => calls.some((call) => call.method === 'clearMemory'), '清空记忆')
   })
 
   it('保存失败时把错误显示在表单里，不静默吞掉', async () => {

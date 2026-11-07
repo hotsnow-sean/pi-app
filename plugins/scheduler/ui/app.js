@@ -79,6 +79,13 @@ const expanded = new Set()
 let search = ''
 let editing = null
 let formError = ''
+// 任务记忆：详情里的可折叠区块。草稿单独存，轮询重绘不会吃掉正在编辑的文字
+let memoryOpen = false
+let memoryEditing = false
+let memoryLoadedFor = ''
+let memoryText = ''
+let memoryDraft = ''
+let memoryError = ''
 let clockSkew = 0
 let lastSig = ''
 let pollTimer = null
@@ -405,6 +412,38 @@ function emptyTasksHtml() {
   `
 }
 
+/** 详情里的「任务记忆」：跨轮事实 + 插件自动追加的执行记录 */
+function memoryHtml(task) {
+  const count = Number(task.memoryRecords) || 0
+  let body = ''
+  if (memoryOpen) {
+    const editingBody = `
+      <textarea class="memory-editor" id="memory-draft" spellcheck="false">${esc(memoryDraft)}</textarea>
+      <div class="memory-actions">
+        <button class="btn" id="btn-memory-save">保存</button>
+        <button class="btn ghost" id="btn-memory-cancel">取消</button>
+        <button class="btn danger-ghost" id="btn-memory-clear">清空记忆</button>
+      </div>`
+    const readBody = `
+      <pre class="memory-body">${esc(memoryText || (memoryLoadedFor === task.id ? '（暂无记忆，跑过一轮后会自动生成）' : '正在读取…'))}</pre>
+      <div class="memory-actions">
+        <button class="btn ghost" id="btn-memory-edit">编辑</button>
+        <button class="btn danger-ghost" id="btn-memory-clear">清空记忆</button>
+      </div>`
+    body = `
+      <div class="memory-content">
+        ${memoryError ? `<div class="run-error">${esc(memoryError)}</div>` : ''}
+        ${memoryEditing ? editingBody : readBody}
+        <div class="memory-hint">长期备注由助理或你写入（只保留最近 800 字），执行记录每轮自动追加（最多 24 条）；改提示词会清空执行记录、保留长期备注。</div>
+      </div>`
+  }
+  return `
+    <div class="memory-block">
+      <button class="prompt-toggle" id="btn-memory">任务记忆 <span class="memory-count">${count} 条执行记录</span><span class="chev">${memoryOpen ? '▴' : '▾'}</span></button>
+      ${body}
+    </div>`
+}
+
 function detailHtml() {
   const task = snap.tasks.find((item) => item.id === selectedId)
   if (!task) {
@@ -455,6 +494,7 @@ function detailHtml() {
       <button class="prompt-toggle" id="btn-prompt">提示词 <span class="chev">▾</span></button>
       <pre class="prompt-body" id="prompt-body" hidden>${esc(task.prompt)}</pre>
     </div>
+    ${memoryHtml(task)}
     <div class="detail-meta">
       <span>通知策略：${esc(task.notifyPolicyLabel)}</span>
       <span>累计完成 ${task.runCount} 次</span>
@@ -851,7 +891,73 @@ function bindDetail() {
   $app.querySelector('.col-detail [data-act="toggle"]')?.addEventListener('click', () => void toggleTask(task, !task.enabled))
   $app.querySelector('.col-detail [data-act="edit"]')?.addEventListener('click', () => openEdit(task))
   $app.querySelector('.col-detail [data-act="delete"]')?.addEventListener('click', () => void deleteTask(task))
+  $app.querySelector('#btn-memory')?.addEventListener('click', () => void toggleMemory(task))
+  $app.querySelector('#memory-draft')?.addEventListener('input', (e) => {
+    memoryDraft = e.target.value
+  })
+  $app.querySelector('#btn-memory-edit')?.addEventListener('click', () => {
+    memoryEditing = true
+    memoryDraft = memoryText
+    render({ keepScroll: true })
+  })
+  $app.querySelector('#btn-memory-cancel')?.addEventListener('click', () => {
+    memoryEditing = false
+    memoryDraft = memoryText
+    memoryError = ''
+    render({ keepScroll: true })
+  })
+  $app.querySelector('#btn-memory-save')?.addEventListener('click', () => void saveMemoryEdit(task))
+  $app.querySelector('#btn-memory-clear')?.addEventListener('click', () => void clearMemoryOf(task))
   bindTimeline()
+}
+
+/** 展开记忆区时才拉全文；换任务时状态已由 selectTask 清空 */
+async function toggleMemory(task) {
+  memoryOpen = !memoryOpen
+  memoryError = ''
+  if (!memoryOpen) {
+    render({ keepScroll: true })
+    return
+  }
+  try {
+    const res = await api('getMemory', { id: task.id })
+    memoryText = res.text ?? ''
+    memoryDraft = memoryText
+    memoryLoadedFor = task.id
+  } catch (error) {
+    memoryError = `读取记忆失败：${error?.message ?? error}`
+  }
+  render({ keepScroll: true })
+}
+
+async function saveMemoryEdit(task) {
+  const value = $app.querySelector('#memory-draft')?.value ?? memoryDraft
+  try {
+    const res = await api('saveMemory', { id: task.id, text: value })
+    memoryText = res.text ?? value
+    memoryDraft = memoryText
+    memoryEditing = false
+    memoryError = ''
+    await refresh()
+  } catch (error) {
+    memoryError = `保存失败：${error?.message ?? error}`
+  }
+  render({ keepScroll: true })
+}
+
+async function clearMemoryOf(task) {
+  try {
+    await api('clearMemory', { id: task.id })
+    memoryText = ''
+    memoryDraft = ''
+    memoryEditing = false
+    memoryLoadedFor = task.id
+    memoryError = ''
+    await refresh()
+  } catch (error) {
+    memoryError = `清空失败：${error?.message ?? error}`
+  }
+  render({ keepScroll: true })
 }
 
 function bindTimeline() {
@@ -965,6 +1071,13 @@ async function copyRun(row) {
 
 async function selectTask(id) {
   selectedId = id
+  // 切任务就丢掉上一个任务的记忆编辑态，别把 A 的草稿保存进 B
+  memoryOpen = false
+  memoryEditing = false
+  memoryLoadedFor = ''
+  memoryText = ''
+  memoryDraft = ''
+  memoryError = ''
   document.body.classList.add('show-detail')
   try {
     await refresh()

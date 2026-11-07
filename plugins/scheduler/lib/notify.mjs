@@ -28,6 +28,7 @@ const imp = (name) => import(pathToFileURL(path.join(import.meta.dirname, `${nam
 
 const { rt, isLive, log, BASELINE_CHARS } = await imp('runtime')
 const { signalPath } = await imp('runs')
+const { notePath, memoryForPrompt } = await imp('memory')
 const { oneLine, fmtWhen } = await imp('format')
 
 /** 任务级策略优先；没设就跟随全局设置；再没有就 on-change */
@@ -151,7 +152,9 @@ export function readSignal(runId) {
  */
 export function buildPrompt(task, runId) {
   const signal = signalPath(runId)
+  const note = notePath(runId)
   const baseline = task?.baseline?.text
+  const memory = memoryForPrompt(task?.id)
   const lines = [String(task.prompt || '').trim(), '', '---']
   lines.push('【定时任务执行约定（由定时任务插件追加，请遵守）】')
   lines.push('- 这是一次无人值守的定时执行：你看不到任何对话上下文，也没有插件工具，只能用内置工具。')
@@ -167,8 +170,15 @@ export function buildPrompt(task, runId) {
   lines.push(
     `- 可选（更可靠）：把一句话摘要写成 JSON 文件 \`${signal}\`，内容形如 {"changed":true,"summary":"一句话结论"}。写完仍然要用一句话回复结论，但不要再调用任何工具。`,
   )
+  lines.push(
+    `- 可选（长期记忆）：如果有**值得跨轮长期记住**的事实（基线数值、已处理条目的 ID、判断口径变更、这次踩的坑），把纯文本写进 \`${note}\`，最多 5 行、合计 300 字以内。不要写本次结论（插件会自动记录），不要编辑或覆盖其他文件。`,
+  )
   lines.push('- 最终答复会被存为运行记录，请直接给结论（不超过 15 行），不要复述这段约定。')
   lines.push('')
+  if (memory) {
+    lines.push(memory)
+    lines.push('')
+  }
   if (baseline) {
     const at = task.baseline?.at
     lines.push(`【上次执行结论${at ? `（${fmtWhen(at)}）` : ''}】`)

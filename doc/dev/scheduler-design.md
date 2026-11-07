@@ -820,3 +820,91 @@ v14 建议给「结果有变化」也补一句「已通知」，让每行自解�
 
 修法：`sched_update` 收到空字符串 `at` 直接 `isError` 并说明「一次性任务必须有具体时刻，
 要换重复方式请传 `kind`」。宁可让模型重问一次，也不替用户决定新时间。
+
+## 16. 跨轮任务记忆（v0.5.0，2026-11-07）
+
+Status: **implemented**。分支 `feat/scheduler-memory`，基线 `v0.7.7-fork.3`（`0f6759f`）的独立 worktree。
+
+### 16.1 起因
+
+WorkBuddy 的定时任务每次执行都能写出「与上次检查（23:57）相比无新动态」。核对后确认：
+运行会话本身**没有对话记忆**，靠的是每个自动化一份工作区内的 `memory.md`——启动时读、
+结束时追加执行记录。这是「状态外化」，不是会话续接（详见项目记忆 `MEMORY.md` 的平台机制节）。
+
+我们 v0.4.0 已有的 `task.baseline` 只是**一层、单向、只读**的记忆：
+`buildPrompt()` 注入上一轮成功结论（600 字），agent 用 `SCHED:changed/unchanged` 回报。
+差距有四个：单点被「成功但跑偏」的输出污染后无法回溯、agent 不能沉淀长期事实、用户看不见
+也改不了、`runs.jsonl` 会被 `pruneRuns()` 按 `historyLimit` 裁掉所以不能拿来当记忆。
+
+### 16.2 落点：每任务一份纯文本
+
+`<dataDir>/memory/<taskId>.md`：
+
+```
+# 定时任务记忆：<任务名>
+
+## 长期备注
+- 基线 comments=1；维护者已确认收到，非提问无需回复
+
+## 执行记录
+- 2026-11-06 23:57 成功 · 有变化 · justhil 首评「收到收到」
+- 2026-11-07 11:02 成功 · 无变化 · 与上次检查相比无新动态
+```
+
+不放 `data.json`（`storage.set` 整份覆盖，50 个任务跟着每次重写），不放 `runs.jsonl`
+（会被裁剪 + 压缩重写）。纯文本让用户和 agent 都能直接读改，这才是记忆该有的样子。
+`task.baseline` 保留不动，继续负责「上次结论」那一块；记忆负责「长期备注 + 历史序列」，
+两者在 prompt 里并列，老任务的迁移是隐式的（没有文件时记忆块为空）。
+
+### 16.3 三条写入通道，只有插件写这个文件
+
+1. **插件兜底追加（零信任）**：`engine.execute()` 收尾追加一行「时间 + 成败 + 有无变化 +
+   一句话摘要」。即使 agent 什么都不做，记忆也在长——这正是「与上次相比」的来源。
+   失败轮**只记 agent 自报的原因，不带输出正文**，与「失败不更新基线」同一条原则，
+   避免半截结论污染下一轮。
+2. **agent 可选沉淀**：本轮可写 `notes/<runId>.md`（路径写在 prompt 里），插件收尾读走、
+   并入 `## 长期备注` 后删除。不让它直接写 `memory.md`：内置 `write` 是整份覆盖，一次半截
+   写盘就能抹掉全部历史。通道与既有 `signals/<runId>.json` 同构——实测 176 条记录里
+   22 条走 file 信号，证明无头会话能写 dataDir 下的绝对路径。
+3. **用户**：详情里的记忆区可查看 / 整份编辑 / 清空；主会话里用 `sched_memory`
+   （`read | append | clear`）。`clearMemory` 同时清 `task.baseline`，下一轮等同首次执行。
+
+### 16.4 注入预算与生命周期
+
+`buildPrompt()` 追加 `【任务记忆】`：长期备注 ≤800 字 + 最近 8 条记录 + 一句使用说明，
+再加原有的 `【上次执行结论】`（≤600 字）。总预算约 2k 字，不把历史全灌进上下文。
+
+- 写盘一律 `.tmp` + `renameSync`；文件总长上限 6000 字、24 条记录、每条 160 字，
+  超限丢最旧记录（`clampMemory` 是纯函数，单测直接喂超长文本）。
+- 任务删除时删文件；`activate()` 再按目录扫一遍孤儿（`sweepMemory`），
+  覆盖「删任务 / 热重载换代」之外漏掉的情况。notes 临时文件按 24h 清。
+- **改 prompt 时清空执行记录、保留长期备注**：旧记录是关于旧目标的，与基线重置同理；
+  用户沉淀的事实不该跟着一起消失。
+
+### 16.5 实现文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `lib/memory.mjs`（新增） | 路径、解析/生成、限幅、原子写、notes 合并、注入合成、孤儿清理 |
+| `lib/runtime.mjs` | 记忆常量与 `rt.memoryDir/notesDir`（含 `resetRuntime` 重置） |
+| `main.mjs` | 建目录、激活时扫孤儿、`sched_memory` 工具名映射 |
+| `lib/notify.mjs` | `buildPrompt` 注入记忆块 + notes 文件约定 |
+| `lib/engine.mjs` | 收尾（gen 校验之后）追加执行记录、合并 note |
+| `lib/methods.mjs` | `getMemory/saveMemory/appendMemory/clearMemory`、`publicTask` 的记忆摘要、改 prompt / 删任务联动 |
+| `lib/tools.mjs` / `plugin.json` | `sched_memory` 工具、v0.5.0 描述 |
+| `ui/app.js` / `ui/style.css` | 详情记忆区（草稿独立保存，轮询重绘不吃正在编辑的文字） |
+
+### 16.6 验证
+
+- 新增 `plugins/scheduler/memory.test.mjs` 12 条：纯函数往返/限幅/去重，端到端两轮注入、
+  notes 合并与临时文件删除、失败不污染、改 prompt 保留备注、`sched_memory` 三动作、
+  删任务与孤儿扫描、storage 读失败时跳过孤儿扫描（防「假空表」误删）、老任务兼容。
+- `plugins/scheduler/ui/app.test.mjs` 10 条（9 → 10）：记忆区展开/编辑/保存/清空。
+- 原有 `main.test.mjs` 42 条全绿，scheduler 合计 **64 条**；`npm run test:scripts`
+  （288 项）、`npm run typecheck:plugins` 通过。
+
+### 16.7 边界（明确不做）
+
+- 不做「记忆自动摘要」：怕插件替 agent 总结错，宁可让 agent 自己写 notes。
+- 不做全局共享记忆：每任务一份，避免监控任务和提醒任务互相串味。
+- 不把记忆做成 IPC 通道：插件私有数据，宿主无需知道。

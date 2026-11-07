@@ -240,7 +240,7 @@ const tools = {
     if (!task) return fail(`没有 id 为 ${id} 的任务。先用 sched_list 查 id；如果用户只是想停掉它，用 sched_update({enabled:false})。`)
     const { runCount } = await methods.deleteTask({ id: task.id })
     return {
-      text: `已删除「${task.name}」（连同 ${runCount} 条运行记录）。这个操作不可撤销。`,
+      text: `已删除「${task.name}」（连同 ${runCount} 条运行记录与任务记忆）。这个操作不可撤销。`,
       details: { id: task.id, deletedRuns: runCount },
     }
   },
@@ -298,6 +298,42 @@ const tools = {
         '完成后结果会写进应用入口的「运行记录」；要现在查进度用 sched_runs({ taskId, limit: 1 })。',
       ].join('\n') + stillScheduled,
       details: { id: task.id, runId: result.runId, status: 'queued' },
+    }
+  },
+
+  /** 查看 / 追加 / 清空任务的跨轮记忆 */
+  async memory(args = {}) {
+    const id = String(args.id || '')
+    const task = taskById(id)
+    if (!task) return fail(`没有 id 为 ${id} 的任务。先用 sched_list 查 id。`)
+    const action = String(args.action || 'read')
+    const text = String(args.text ?? '')
+    try {
+      if (action === 'read') {
+        const res = await methods.getMemory({ id: task.id })
+        return {
+          text: [`「${task.name}」的任务记忆（${res.chars} 字，${res.records} 条执行记录）：`, '', res.text.slice(0, 4_000)].join('\n'),
+          details: { id: task.id, chars: res.chars, records: res.records, text: res.text },
+        }
+      }
+      if (action === 'append') {
+        if (!text.trim()) return fail('append 需要给 text：要长期记住的几行纯文本。')
+        const res = await methods.appendMemory({ id: task.id, text })
+        return {
+          text: `已把内容追加到「${task.name}」的长期备注（现在共 ${res.text.length} 字）。`,
+          details: { id: task.id, chars: res.text.length },
+        }
+      }
+      if (action === 'clear') {
+        await methods.clearMemory({ id: task.id })
+        return {
+          text: `已清空「${task.name}」的任务记忆与上次结论，下一轮等同首次执行。`,
+          details: { id: task.id, cleared: true },
+        }
+      }
+      return fail(`未知的 action「${action}」，只能是 read / append / clear。`)
+    } catch (error) {
+      return fail(`记忆操作失败：${oneLine(error?.message ?? error, 200)}`)
     }
   },
 
