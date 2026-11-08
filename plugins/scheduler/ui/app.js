@@ -1167,12 +1167,14 @@ async function selectTask(id) {
   } catch (error) {
     console.error('refresh failed', error)
   }
-  render()
+  // 这几百毫秒里用户可能已经点开记忆编辑：那两帧重绘会把 textarea 换掉。
+  // 和轮询同一个道理——编辑态下让给下一次轮询补。
+  if (!memoryEditing) render()
   // 打开详情 = 看到结果，清未读（失败时不该继续闪红点）
   try {
     await api('markSeen', { taskId: id })
     snap.unreadByTask[id] = 0
-    render({ keepScroll: true })
+    if (!memoryEditing) render({ keepScroll: true })
   } catch {
     /* 标已读失败不影响阅读 */
   }
