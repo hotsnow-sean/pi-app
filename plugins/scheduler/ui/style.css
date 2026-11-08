@@ -6,7 +6,8 @@
   /* 原生控件（时间/日期选择器图标与弹层、select 下拉）跟随宿主明暗 */
   color-scheme: var(--pi-color-scheme, light);
   --bg: var(--pi-background, #f7f8fa);
-  --card: var(--pi-card, #ffffff);
+  /* 兜底透明而不是白色：同 background-tasks，避免主题到达前闪出一帧白卡片 */
+  --card: var(--pi-card, transparent);
   --border: var(--pi-border, #e5e7eb);
   --text: var(--pi-foreground, #1a1f36);
   --text-2: var(--pi-muted-foreground, #6b7280);
@@ -20,10 +21,14 @@
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
+/* 同 background-tasks：根元素显式透明，否则 canvas 会按 UA 的 light 底色画白 */
+html, body { margin: 0; padding: 0; background: transparent; }
 body {
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  background: var(--bg);
+  /* 兜底透明而不是浅色：主题变量要等 iframe load 之后宿主才推过来，在那之前
+     画浅色的话，深色主题下切面板会闪一下白。透明时透出的是 iframe 自己的底色
+     （宿主设成 --background），拿到变量后这两者本来就同色，切换无缝。 */
+  background: var(--pi-background, transparent);
   color: var(--text);
   font-size: 13px;
   line-height: 1.55;

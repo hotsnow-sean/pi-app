@@ -3,7 +3,9 @@
 :root {
   color-scheme: var(--pi-color-scheme, light);
   --bg: var(--pi-background, #f7f8fa);
-  --card: var(--pi-card, #ffffff);
+  /* 兜底透明而不是白色：主题要等 iframe 里桥跑起来才推过来，在那之前画白卡片，
+     深色主题下切面板就是一帧白闪。透明时透出的是容器底色（宿主铺的 --background）。 */
+  --card: var(--pi-card, transparent);
   --border: var(--pi-border, #e5e7eb);
   --text: var(--pi-foreground, #1a1f36);
   --text-2: var(--pi-muted-foreground, #6b7280);
@@ -17,10 +19,15 @@
   --mono: ui-monospace, 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; }
+/* 根元素也显式透明：只让 body 透明还不够——根元素的背景会传播到 canvas，
+   没设时浏览器按 color-scheme 画 UA 底色（light 下就是白），那层白盖在 iframe 底色上面。 */
+html, body { margin: 0; padding: 0; height: 100%; background: transparent; }
 body {
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  background: var(--bg);
+  /* 兜底透明而不是浅色：主题变量要等 iframe load 之后宿主才推过来，在那之前
+     画浅色的话，深色主题下切面板会闪一下白。透明时透出的是 iframe 自己的底色
+     （宿主设成 --background），拿到变量后这两者本来就同色，切换无缝。 */
+  background: var(--pi-background, transparent);
   color: var(--text);
   font-size: 13px;
   line-height: 1.55;

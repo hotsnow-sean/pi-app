@@ -3768,3 +3768,27 @@ html[data-bg='on'] .composer-dock-fade { background: linear-gradient(to top, col
 html[data-bg-cover='full'] .shell-track-center .main-chat-column { border-radius: 0; }
 /* The fade's scrollbar gap would leave an untinted strip on the image. */
 html[data-bg='on'] .composer-dock-fade { right: 0; }
+
+/* ---------- 插件面板 iframe：内容加载前后的底色 ----------
+ * 插件文档是独立浏览上下文，它的第一帧（解析中 / CSS 未到 / 主题变量还没注入）
+ * 由浏览器按自己的默认色画：light 下就是白的。深色主题切面板时，这一帧在
+ * #1f1f1f 面板上就是一道白闪（浅色主题下白=白，看不出来）。
+ *
+ * 两层兜：
+ * 1. iframe 元素自己铺宿主底色 —— 插件文档透明期间透出来的就是它；
+ * 2. 把宿主的明暗告诉这个 iframe —— `color-scheme` 会传播给嵌套文档的初始
+ *    canvas（about:blank / 尚未定位到 <html> 之前那一段），让 UA 默认底色跟着变深。
+ *    只做 1 不做 2，初始 canvas 仍是不透明白，会盖住元素底色。
+ *
+ * 插件侧的配合约定见 doc/dev/plugin-host-api.md「首帧底色」：插件自己的背景
+ * 应当用 `var(--pi-background, transparent)`，拿到主题前透明，拿到后与宿主同色，
+ * 这样加载与换主题都不会跳。
+ */
+.plugin-panel-frame {
+  background: hsl(var(--background));
+  color-scheme: light;
+}
+.dark .plugin-panel-frame,
+html.dark .plugin-panel-frame {
+  color-scheme: dark;
+}

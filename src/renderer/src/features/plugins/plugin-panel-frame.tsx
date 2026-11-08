@@ -137,6 +137,24 @@ export function PluginPanelFrame({
   const readySentRef = useRef(false)
   /** content 模式下插件上报的高度；null = 还没报，先用默认值占位 */
   const [contentHeight, setContentHeight] = useState<number | null>(null)
+  /** 已经「画对颜色」的那份文档是谁（`<插件>|<入口>`）—— 见下方 painted 注释 */
+  const [paintedKey, setPaintedKey] = useState('')
+  /**
+   * 文档身份：只由「哪份入口文件」决定，不看 panelId。同一个插件换面板时宿主不换 src、
+   * iframe 不会重新导航（文档一直是那一份），拿 panelId 当身份会把它误判成「新文档」，
+   * 于是藏起来等一次根本不会到来的 hello。
+   */
+  const frameKey = `${pluginId}|${entry ?? ''}`
+  /**
+   * 首帧遮罩：插件文档拿到 `plugin-theme` 之前，会按自己的兜底色（浅色）画几帧。
+   * 深色主题下切面板，那几帧就是一道白闪——而且它是**真实内容**，光给 iframe 铺底色
+   * 盖不住。
+   *
+   * 所以文档就绪前先不露脸：等桥发来 hello（说明文档真跑起来了）、推一次主题、
+   * 再留两帧让插件把 CSS 变量落到样式里，然后才显示。露出来之前看到的是容器自己的
+   * 底色，与面板同色，接缝不可见。插件侧配合见 doc/dev/plugin-host-api.md「首帧底色」。
+   */
+  const painted = paintedKey === frameKey
 
   // 面板要看得到「用户正在哪儿」：会话条按当前会话过滤，右栏详情按当前工作区兜底
   const workspacePath = useUIStore((s) => s.currentWorkspace)
@@ -182,6 +200,28 @@ export function PluginPanelFrame({
     pushEnvironment()
   }, [workspacePath, sessionFile, sessionId, pushEnvironment])
 
+  /**
+   * 露脸：主题已经推下去，再给插件两帧把 CSS 变量落到样式里，然后才显示。
+   *
+   * 用 hello 当信号，不用 load —— iframe 在目标 src 生效前还会先有一次 about:blank 的
+   * load（实测 40ms 上下），那个时点插件一行代码都没跑，跟着它露脸等于没遮。
+   * hello 是桥脚本在插件文档里同步发出的，它到来说明「这是真文档，而且能收消息了」。
+   */
+  const reveal = useCallback(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setPaintedKey(`${pluginId}|${entry ?? ''}`))
+    })
+  }, [pluginId, entry])
+
+  /**
+   * 绝对兜底：不发 hello 的插件（纯静态页）也得能显示出来。
+   * 换插件时重新计时，别让上一份文档的定时器替新文档做决定。
+   */
+  useEffect(() => {
+    const timer = setTimeout(() => setPaintedKey(`${pluginId}|${entry ?? ''}`), 800)
+    return () => clearTimeout(timer)
+  }, [pluginId, entry])
+
   const handleMessage = useCallback(
     (event: MessageEvent) => {
       const frame = iframeRef.current
@@ -191,6 +231,8 @@ export function PluginPanelFrame({
       if (data.type === 'plugin-hello') {
         // 桥脚本在 iframe 里同步执行时就发了 hello，比 load 更早；ready 由 pushEnvironment 统一发
         pushEnvironment()
+        // 真文档就位、主题已经在路上 —— 让它再画一帧，然后露脸
+        reveal()
         return
       }
       if (data.type === 'plugin-content-height') {
@@ -251,7 +293,7 @@ export function PluginPanelFrame({
         return
       }
     },
-    [pluginId, panelId, pushEnvironment],
+    [pluginId, panelId, pushEnvironment, reveal],
   )
 
   useEffect(() => {
@@ -313,10 +355,15 @@ export function PluginPanelFrame({
     >
       <iframe
         ref={iframeRef}
-        className="h-full w-full border-0 bg-transparent"
+        /* 底色不能用 transparent：插件文档加载中的第一帧由浏览器按 UA 默认画，
+           深色主题下就是一道白闪。`.plugin-panel-frame` 铺宿主底色并把 color-scheme
+           传给嵌套文档，见 globals.css 同名注释。 */
+        className="plugin-panel-frame h-full w-full border-0"
         title={title ?? `plugin:${pluginId}`}
         src={pluginEntryUrl(pluginId, entry)}
         sandbox="allow-scripts allow-forms allow-modals"
+        /* 主题落地前先藏着（见上面 painted 的注释）：露出来之前只有容器底色 */
+        style={{ visibility: painted ? 'visible' : 'hidden' }}
         onLoad={() => {
           // 兜底：不依赖插件 UI 记得发 hello。load 晚于首屏脚本执行，
           // 监听器已就位，所以这里推一次主题能真正落地，避免界面停在插件自带兜底色上。
