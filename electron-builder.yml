@@ -56,6 +56,9 @@ extraResources:
       # tsconfig.json 给 npm run typecheck:plugins 用。运行时不需要，别混进安装包。
       - "!plugin-sdk.d.ts"
       - "!tsconfig.json"
+      # 插件自己的单元测试留在仓库里跑，不进安装包
+      - "!**/*.test.mjs"
+      - "!**/__tests__/**"
 
 win:
   target:
