@@ -25,8 +25,28 @@ vi.mock('./config-store', () => ({
 import {
   checkGitHubReleaseUpdate,
   classifyAssetName,
+  isVersionNewer,
   pickDownloadAsset,
 } from './github-release-check'
+
+describe('isVersionNewer for fork builds', () => {
+  it('should_compare_fork_build_numbers_when_base_version_is_equal', () => {
+    expect(isVersionNewer('v0.7.7-fork.5', '0.7.7-fork.4')).toBe(true)
+    expect(isVersionNewer('v0.7.7-fork.4', '0.7.7-fork.5')).toBe(false)
+    expect(isVersionNewer('v0.7.7-fork.4', '0.7.7-fork.4')).toBe(false)
+  })
+
+  it('should_still_compare_base_versions_first', () => {
+    expect(isVersionNewer('v0.7.8-fork.1', '0.7.7-fork.9')).toBe(true)
+    expect(isVersionNewer('v0.7.6-fork.9', '0.7.7-fork.4')).toBe(false)
+  })
+
+  it('should_not_offer_a_plain_upstream_version_over_a_fork_build', () => {
+    // 0.7.7 与 0.7.7-fork.4 基础版本相同：正式版按 N=0 算，不该提示「有新版本」
+    expect(isVersionNewer('v0.7.7', '0.7.7-fork.4')).toBe(false)
+    expect(isVersionNewer('v0.7.7-fork.1', '0.7.7')).toBe(true)
+  })
+})
 
 describe('pickDownloadAsset architecture (#97)', () => {
   const asset = (name: string) => ({
@@ -108,7 +128,7 @@ describe('checkGitHubReleaseUpdate network wiring', () => {
 
     expect(electron.fetch).toHaveBeenCalledTimes(1)
     expect(electron.fetch.mock.calls[0][0]).toBe(
-      'https://api.github.com/repos/justhil/pi-app/releases/latest',
+      'https://api.github.com/repos/hotsnow-sean/pi-app/releases/latest',
     )
     expect(electron.fetch.mock.calls[0][1]).toMatchObject({
       headers: {

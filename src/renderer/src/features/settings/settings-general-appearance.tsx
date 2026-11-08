@@ -215,9 +215,9 @@ export function GeneralSettings() {
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  void ipcClient.invoke('app.openRelease', { url: 'https://github.com/justhil/pi-app' })
-                }
+                // 不带 url：由主进程按 fork 的发布源拼（见 src/main/fork-release.ts），
+                // 免得仓库地址在这两处各写一遍、改一处漏一处
+                onClick={() => void ipcClient.invoke('app.openRelease', {})}
                 className={btnOutline}
                 title={t('settings:general.openGitHub')}
               >

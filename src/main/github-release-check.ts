@@ -2,9 +2,8 @@ import { app, net } from 'electron'
 import log from 'electron-log'
 import type { AppUpdateAsset, AppUpdateAssetKind } from '@shared/app-update'
 import { fetchLatestGitHubRelease, type GhAsset } from './github-release-fetch'
+import { releaseRepoSlug } from './fork-release'
 import { emitOperationEvent } from './operation-events'
-
-const DEFAULT_REPO = 'justhil/pi-app'
 
 export type GitHubReleaseCheckResult = {
   ok: boolean
@@ -20,13 +19,20 @@ export type GitHubReleaseCheckResult = {
 }
 
 function repoSlug(): string {
-  return (process.env.PI_DESKTOP_GITHUB_REPO || DEFAULT_REPO).trim()
+  // fork 版只看自己的 release，别被上游更新推回官方包（见 fork-release.ts）
+  return releaseRepoSlug()
 }
 
 export function parseSemver(tag: string): number[] {
   const match = String(tag).trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/)
   if (!match) return [0]
   return [Number(match[1]) || 0, Number(match[2]) || 0, Number(match[3]) || 0]
+}
+
+/** fork 构建号：`0.7.7-fork.5` → 5；无此后缀（上游正式版）→ 0 */
+function forkBuildNumber(version: string): number {
+  const match = String(version).trim().match(/-fork\.(\d+)$/i)
+  return match ? Number(match[1]) || 0 : 0
 }
 
 export function isVersionNewer(candidate: string, current: string): boolean {
@@ -39,7 +45,9 @@ export function isVersionNewer(candidate: string, current: string): boolean {
     if (left > right) return true
     if (left < right) return false
   }
-  return false
+  // 基础版本相同：fork 构建之间按 -fork.N 递增判断（0.7.7-fork.5 > 0.7.7-fork.4）。
+  // parseSemver 只看前三段，不补这一步的话 fork 版永远「已是最新」。
+  return forkBuildNumber(candidate) > forkBuildNumber(current)
 }
 
 export function classifyAssetName(name: string): AppUpdateAssetKind {
