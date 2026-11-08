@@ -26,6 +26,7 @@ vi.mock('electron', () => ({
 import {
   activeSessionTailCount,
   releaseSessionTailsForSender,
+  releaseSessionTailsForSenderId,
   setSessionTailTimingForTests,
   shutdownSessionTails,
   subscribeSessionTail,
@@ -157,6 +158,30 @@ describe('session tails', () => {
     subscribeSessionTail(one, b.contents as never)
     expect(activeSessionTailCount()).toBe(2)
     releaseSessionTailsForSender(a.contents as never)
+    expect(activeSessionTailCount()).toBe(1)
+  })
+
+  it('按 id 收回：销毁后的回调不能再去碰 sender 对象', () => {
+    const one = writeSession('one.jsonl')
+    const two = writeSession('two.jsonl')
+    const a = makeSender()
+    const b = makeSender()
+    const aId = a.contents.id
+    subscribeSessionTail(one, a.contents as never)
+    subscribeSessionTail(two, a.contents as never)
+    subscribeSessionTail(one, b.contents as never)
+    // destroyed 之后 WebContents 的 getter 与 .id 都会抛。这个替身一碰就炸，
+    // 用它证明：旧入口（传对象）在销毁后的回调里必然抛，新入口（传 id）不会。
+    const destroyed = new Proxy(
+      {},
+      {
+        get() {
+          throw new TypeError('Object has been destroyed')
+        },
+      },
+    )
+    expect(() => releaseSessionTailsForSender(destroyed as never)).toThrow(TypeError)
+    expect(() => releaseSessionTailsForSenderId(aId)).not.toThrow()
     expect(activeSessionTailCount()).toBe(1)
   })
 

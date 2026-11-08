@@ -176,10 +176,28 @@ export function unsubscribeSessionTail(sessionFile: string, sender: WebContents)
   if (entry.subscribers.size === 0) drop(file)
 }
 
-/** 窗口关闭 / reload：它的所有订阅都失效了 */
+/**
+ * 窗口关闭 / reload：它的所有订阅都失效了。
+ *
+ * 传对象只适用于「sender 还活着」的场景（unsubscribe、手动清理）。`destroyed` 事件过后
+ * WebContents 已经失效，连 `.id` 都会抛 "Object has been destroyed" —— 那种场合调用方
+ * 必须在销毁前把 id 取好，改走 {@link releaseSessionTailsForSenderId}。
+ */
 export function releaseSessionTailsForSender(sender: WebContents): void {
+  releaseSessionTailsForSenderId(sender.id)
+}
+
+/**
+ * 按 webContents id 收回订阅。
+ *
+ * 存在的理由是一次真实事故：`webContents.on('destroyed', () => win.webContents)` 在
+ * 退出时抛 `TypeError: Object has been destroyed`，撞上全局 uncaughtException 兜底弹了个
+ * 错误框，而 `app.exit(0)` 紧接着就把进程收掉了 —— 用户只看到「退出时闪一下报错」，
+ * 日志里也来不及留下什么。所以销毁后的回调只能碰 id，不能碰对象。
+ */
+export function releaseSessionTailsForSenderId(senderId: number): void {
   for (const [file, entry] of [...entries]) {
-    entry.subscribers.delete(sender.id)
+    entry.subscribers.delete(senderId)
     if (entry.subscribers.size === 0) drop(file)
   }
 }

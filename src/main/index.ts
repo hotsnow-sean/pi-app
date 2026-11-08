@@ -4,7 +4,7 @@ import { registerPluginProtocolScheme } from './plugins/protocol'
 import { isPluginUiUrl } from '@shared/plugin-panel-url'
 import { createWindow, getMainWindow } from './window'
 import { refreshGitWorkspaceWatch } from './git-workspace-watch'
-import { releaseSessionTailsForSender } from './session-tails'
+import { releaseSessionTailsForSenderId } from './session-tails'
 import { registerAllHandlers } from './ipc'
 import { workerManager } from './worker-manager'
 import { sessionPreviewProcess } from './session-preview-process'
@@ -30,10 +30,19 @@ process.stderr?.on?.('error', () => {})
 if (!app.isPackaged && process.env.PI_DEVTOOLS_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.PI_DEVTOOLS_PORT)
 }
+/**
+ * 退出流程已经开始。
+ *
+ * 退出阶段弹错误框没有意义：窗口正在销毁，`app.exit(0)` 紧接着就执行，用户只会看到
+ * 一个框闪一下（v0.7.7-fork.6 里「点退出闪一下报错」就是这个观感）。这类异常只记日志。
+ */
+let appQuitting = false
+
 process.on('uncaughtException', (err) => {
   const code = (err as NodeJS.ErrnoException)?.code
   if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') return
   console.error('[Main] Uncaught exception:', err)
+  if (appQuitting) return
   try {
     const win = getMainWindow()
     const msg = err instanceof Error ? err.message : String(err)
@@ -68,8 +77,13 @@ function attachCompletionNotificationShortcut(win: BrowserWindow): void {
  * 订阅关系看起来「还活着」，但新页面根本没打开任何预览——这种残留最容易被忽略。
  */
 function attachSessionTailCleanup(win: BrowserWindow): void {
-  win.webContents.on('destroyed', () => releaseSessionTailsForSender(win.webContents))
-  win.webContents.on('did-navigate', () => releaseSessionTailsForSender(win.webContents))
+  const webContents = win.webContents
+  // destroyed 之后 webContents 已经失效，回调里再读 `win.webContents` 或 `webContents.id`
+  // 都会抛 "Object has been destroyed"：退出时表现为闪一下的错误框（app.exit 紧接着就
+  // 把进程收掉，用户只看见闪光）。id 必须在这里、在销毁发生之前取好。
+  const senderId = webContents.id
+  webContents.on('destroyed', () => releaseSessionTailsForSenderId(senderId))
+  webContents.on('did-navigate', () => releaseSessionTailsForSenderId(senderId))
 }
 
 function createMenu(): void {
@@ -221,6 +235,7 @@ function gracefulShutdownWorkers(): Promise<void> {
 
 async function performGracefulShutdown(): Promise<void> {
   isQuittingGracefully = true
+  appQuitting = true
   try {
     await import('./remote-gateway-service').then((m) => m.stopRemoteGateway()).catch(() => {})
     await workerManager.stop()
