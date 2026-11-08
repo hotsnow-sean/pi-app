@@ -34,8 +34,13 @@ export const OUTPUT_LIMIT = 16_384
 export const PREVIEW_CHARS = 120
 /** 注入下次 prompt 的基线长度 */
 export const BASELINE_CHARS = 600
-/** 任务记忆：单份文件总字数上限、备注保留字数、执行记录保留条数/每条字数、注入条数 */
+/**
+ * 任务记忆：单份文件总字数上限、写盘时备注保留字数、注入时备注预算、
+ * 执行记录保留条数/每条字数、注入条数。
+ * 写盘与注入是两个量：用户能写 4000 字，但每轮只带最近 800 字进 prompt。
+ */
 export const MEMORY_MAX_CHARS = 6_000
+export const MEMORY_NOTES_KEEP_CHARS = 4_000
 export const MEMORY_NOTES_CHARS = 800
 export const MEMORY_RECORD_LINES = 24
 export const MEMORY_RECORD_CHARS = 160

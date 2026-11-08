@@ -264,7 +264,8 @@ const methods = {
     const task = taskById(String(id || ''))
     if (!task) throw new Error('任务不存在')
     const text = readMemoryText(task.id, task.name)
-    return { id: task.id, name: task.name, text, chars: text.length, ...memoryInfo(task.id) }
+    // memoryInfo 里已经带 chars / exists / records，别再手写一遍（会被覆盖，白读一次盘）
+    return { id: task.id, name: task.name, text, ...memoryInfo(task.id) }
   },
 
   /** 用户整份编辑记忆：解析两段 → 限幅 → 原子写回 */

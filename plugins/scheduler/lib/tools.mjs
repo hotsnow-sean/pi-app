@@ -28,6 +28,9 @@ function fail(text, details) {
   return { text, isError: true, details }
 }
 
+/** sched_memory read 一次最多回多少字：工具输出太长会挤占上下文，截了也要说明 */
+const TOOL_MEMORY_READ_CHARS = 4_000
+
 function taskById(id) {
   return rt.state.tasks.find((task) => String(task.id) === String(id)) ?? null
 }
@@ -311,9 +314,14 @@ const tools = {
     try {
       if (action === 'read') {
         const res = await methods.getMemory({ id: task.id })
+        // 文件上限 6000 字，工具回显只给前 4000 字：截了要说，别让 agent 以为这就是全文
+        const cut = res.text.length > TOOL_MEMORY_READ_CHARS
+        const body = cut
+          ? `${res.text.slice(0, TOOL_MEMORY_READ_CHARS)}\n…（已截断，共 ${res.text.length} 字；完整内容在任务面板的「任务记忆」里看）`
+          : res.text
         return {
-          text: [`「${task.name}」的任务记忆（${res.chars} 字，${res.records} 条执行记录）：`, '', res.text.slice(0, 4_000)].join('\n'),
-          details: { id: task.id, chars: res.chars, records: res.records, text: res.text },
+          text: [`「${task.name}」的任务记忆（${res.chars} 字，${res.records} 条执行记录）：`, '', body].join('\n'),
+          details: { id: task.id, chars: res.chars, records: res.records, truncated: cut, text: res.text },
         }
       }
       if (action === 'append') {

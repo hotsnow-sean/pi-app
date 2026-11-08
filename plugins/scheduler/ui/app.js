@@ -434,7 +434,7 @@ function memoryHtml(task) {
       <div class="memory-content">
         ${memoryError ? `<div class="run-error">${esc(memoryError)}</div>` : ''}
         ${memoryEditing ? editingBody : readBody}
-        <div class="memory-hint">长期备注由助理或你写入（只保留最近 800 字），执行记录每轮自动追加（最多 24 条）；改提示词会清空执行记录、保留长期备注。</div>
+        <div class="memory-hint">长期备注由助理或你写入（最多存 4000 字，每轮只把最近 800 字带进提示词），执行记录每轮自动追加（最多 24 条）；编辑时只有「长期备注」和「执行记录」两段生效，改提示词会清空执行记录、保留长期备注。</div>
       </div>`
   }
   return `
@@ -916,6 +916,9 @@ async function toggleMemory(task) {
   memoryOpen = !memoryOpen
   memoryError = ''
   if (!memoryOpen) {
+    // 收起来就等于放弃编辑：不留一个「编辑中」的状态卡住后续轮询重绘
+    memoryEditing = false
+    memoryDraft = memoryText
     render({ keepScroll: true })
     return
   }
@@ -946,6 +949,8 @@ async function saveMemoryEdit(task) {
 }
 
 async function clearMemoryOf(task) {
+  // 这是整个面板最不可逆的动作（连上次结论一起清），不能一点就走
+  if (!window.confirm(`清空「${task.name}」的任务记忆？\n长期备注、执行记录和上次结论都会清掉，下一轮等同首次执行，且不可撤销。`)) return
   try {
     await api('clearMemory', { id: task.id })
     memoryText = ''
@@ -1233,7 +1238,9 @@ function schedulePoll() {
     if (view !== 'edit') {
       try {
         await refresh()
-        if (signature() !== lastSig) render({ keepScroll: true })
+        // 正在编辑记忆时不吃自动重绘：全量重建 DOM 会把 textarea 一起换掉，
+        // 光标和焦点都会丢（内容有草稿兜着，但手会被打断）。停下编辑后下一次轮询会补上。
+        if (signature() !== lastSig && !memoryEditing) render({ keepScroll: true })
         else updateUi()
       } catch {
         /* 面板短暂失联时静默重试 */

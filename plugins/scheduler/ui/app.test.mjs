@@ -12,6 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'app.js'), 'utf8')
 const realSetInterval = window.setInterval.bind(window)
 const realSetTimeout = window.setTimeout.bind(window)
+const realConfirm = window.confirm.bind(window)
 
 const wait = (ms) => new Promise((resolve) => realSetTimeout(resolve, ms))
 
@@ -220,6 +221,7 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="app"></div>'
   // 轮询不是这组用例的对象；关掉它，所有重绘都由动作驱动
   window.setInterval = () => 0
+  window.confirm = () => true
   isolateListeners()
   // 桥由宿主下发，UI 只认 window.pi；这里装一个替身（真桥有独立单测）
   installFakeBridge()
@@ -229,6 +231,8 @@ beforeEach(() => {
 afterEach(() => {
   removeListeners()
   window.setInterval = realSetInterval
+  window.setTimeout = realSetTimeout
+  window.confirm = realConfirm
 })
 
 describe('应用入口 UI', () => {
@@ -389,6 +393,54 @@ describe('应用入口 UI', () => {
 
     document.querySelector('#app #btn-memory-clear').click()
     await waitFor(() => calls.some((call) => call.method === 'clearMemory'), '清空记忆')
+  })
+
+  it('清空记忆要二次确认，取消就不发请求', async () => {
+    window.confirm = () => false
+    tasks = [task('t1', { hasMemory: true, memoryRecords: 1 })]
+    loadUi()
+    await waitFor(() => document.querySelector('#app .task-card'), '列表出现')
+    document.querySelector('#app .task-card').click()
+    await waitFor(() => document.querySelector('#app #btn-memory'), '记忆按钮出现')
+    document.querySelector('#app #btn-memory').click()
+    await waitFor(() => document.querySelector('#app #btn-memory-clear'), '清空按钮出现')
+
+    document.querySelector('#app #btn-memory-clear').click()
+    await wait(30)
+    expect(calls.some((call) => call.method === 'clearMemory')).toBe(false)
+  })
+
+  it('编辑记忆时轮询不重建输入框：焦点和正在写的内容都保住', async () => {
+    // 这条必须让轮询真的跑：把长 delay 压到 20ms（只在本用例内生效）
+    window.setTimeout = (fn, ms, ...args) => realSetTimeout(fn, ms >= 2_000 ? 20 : ms, ...args)
+    tasks = [task('t1', { hasMemory: true, memoryRecords: 1 })]
+    loadUi()
+    await waitFor(() => document.querySelector('#app .task-card'), '列表出现')
+    document.querySelector('#app .task-card').click()
+    await waitFor(() => document.querySelector('#app #btn-memory'), '记忆按钮出现')
+    document.querySelector('#app #btn-memory').click()
+    await waitFor(() => document.querySelector('#app .memory-body'), '记忆正文出现')
+    document.querySelector('#app #btn-memory-edit').click()
+    await waitFor(() => document.querySelector('#app #memory-draft'), '编辑框出现')
+
+    const draft = document.querySelector('#app #memory-draft')
+    draft.value = '## 长期备注\n- 正在输入的内容\n'
+    draft.dispatchEvent(new Event('input', { bubbles: true }))
+    draft.focus()
+
+    // 编辑期间有任务跑完：签名变化（memoryRecords 1 → 2）
+    tasks = [task('t1', { hasMemory: true, memoryRecords: 2, runCount: 2 })]
+    const before = calls.filter((call) => call.method === 'snapshot').length
+    await waitFor(() => calls.filter((call) => call.method === 'snapshot').length > before + 1, '轮询跑过两轮')
+
+    const still = document.querySelector('#app #memory-draft')
+    expect(still).toBe(draft) // 同一个元素，没被重建
+    expect(still.value).toContain('正在输入的内容')
+    expect(document.activeElement).toBe(still)
+
+    // 退出编辑后恢复重绘，计数跟得上
+    document.querySelector('#app #btn-memory-cancel').click()
+    await waitFor(() => document.querySelector('#app .memory-count').textContent.includes('2 条'), '计数更新')
   })
 
   it('保存失败时把错误显示在表单里，不静默吞掉', async () => {
