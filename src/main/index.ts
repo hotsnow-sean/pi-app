@@ -1,6 +1,7 @@
 import './bootstrap-path'
 import { app, shell, type BrowserWindow, dialog, session, Menu } from 'electron'
 import { registerPluginProtocolScheme } from './plugins/protocol'
+import { isPluginUiUrl } from '@shared/plugin-panel-url'
 import { createWindow, getMainWindow } from './window'
 import { refreshGitWorkspaceWatch } from './git-workspace-watch'
 import { releaseSessionTailsForSender } from './session-tails'
@@ -115,6 +116,15 @@ app.whenReady().then(() => {
   // CSP: inject Content-Security-Policy header in production (skip dev for Vite HMR)
   if (!is.dev) {
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      // pi-plugin:// 的响应自带 CSP（见 plugins/protocol.ts），这里必须整份让给协议层。
+      // 覆盖的后果不是「更严格」而是「桥脚本变跨源」：插件文档 origin 是
+      // pi-plugin://<插件>，桥在 pi-plugin://__host，而应用级 CSP 的 script-src 只有
+      // 'self' —— 安装版一开面板就是「插件桥未加载」。两份 CSP 并存也等于取交集，
+      // 所以不能合并，只能跳过。
+      if (isPluginUiUrl(details.url)) {
+        callback({ responseHeaders: details.responseHeaders })
+        return
+      }
       callback({
         responseHeaders: {
           ...details.responseHeaders,

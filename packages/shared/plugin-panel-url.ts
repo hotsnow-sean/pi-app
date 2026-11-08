@@ -34,3 +34,17 @@ export function pluginEntryUrl(pluginId: string, entry: string = DEFAULT_PLUGIN_
 export function pluginEntryPath(pathname: string): string {
   return decodeURIComponent(String(pathname || '')).replace(/^\/+/, '') || DEFAULT_PLUGIN_UI_ENTRY
 }
+
+/**
+ * 这个 URL 是不是插件 UI 协议下的响应（`pi-plugin://…`）。
+ *
+ * 给生产环境的全局 CSP 注入用（src/main/index.ts 的 onHeadersReceived）：那里会给**所有**
+ * 响应盖一份应用级 CSP（`script-src 'self'`），而插件文档要的是 protocol.ts 那份更贴身的
+ * （`script-src pi-plugin:`）。盖上去的后果不是「更严格」而是「桥变跨源」——插件文档
+ * origin 是 `pi-plugin://<插件>`，桥在 `pi-plugin://__host`，于是被 'self' 拒掉，每个面板
+ * 都显示「插件桥未加载」（只在打包版复现，dev 不注入 CSP）。两份 CSP 并存也只是取交集，
+ * 所以这类响应必须整份跳过。
+ */
+export function isPluginUiUrl(url: string): boolean {
+  return String(url || '').startsWith(`${PLUGIN_UI_SCHEME}:`)
+}
