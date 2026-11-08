@@ -116,6 +116,78 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
+// ---------- 自绘确认框 ----------
+
+/** 当前挂着的确认框终结函数；同一时刻只留一个，后开的会先把前一个当「取消」结掉 */
+let confirmOpen = null
+
+/**
+ * 面板自己的确认框，代替 `window.confirm`。
+ *
+ * 为什么不用系统的：它是浏览器/系统画的窗口，字体、配色、按钮顺序都不跟主题走——
+ * 深色主题下面板里突然弹出一块浅灰，很容易被当成「这不是这个应用的东西」。
+ *
+ * @param {{ title: string, body?: string, confirmText?: string, cancelText?: string, danger?: boolean }} options
+ * @returns {Promise<boolean>}
+ */
+function confirmDialog(options = {}) {
+  const { title, body = '', confirmText = '确定', cancelText = '取消', danger = false } = options
+  if (confirmOpen) confirmOpen(false)
+  return new Promise((resolve) => {
+    const restoreFocus = document.activeElement
+    const overlay = document.createElement('div')
+    overlay.className = 'confirm-overlay'
+    // 文案走 textContent：任务名里可能有引号/尖括号，拼字符串容易漏转义
+    overlay.innerHTML = `
+      <div class="confirm-card" role="dialog" aria-modal="true">
+        <div class="confirm-title"></div>
+        <div class="confirm-body"></div>
+        <div class="confirm-actions">
+          <button class="btn ghost" type="button" data-confirm="cancel"></button>
+          <button class="btn ${danger ? 'danger' : ''}" type="button" data-confirm="ok"></button>
+        </div>
+      </div>`
+    overlay.querySelector('.confirm-title').textContent = title
+    overlay.querySelector('[data-confirm="cancel"]').textContent = cancelText
+    overlay.querySelector('[data-confirm="ok"]').textContent = confirmText
+    const bodyEl = overlay.querySelector('.confirm-body')
+    if (body) bodyEl.textContent = body
+    else bodyEl.remove()
+
+    const finish = (ok) => {
+      if (confirmOpen !== finish) return
+      confirmOpen = null
+      // 捕获阶段拦 Esc：面板全局的 Esc 是「退出当前视图」，弹窗开着时不该一起触发
+      document.removeEventListener('keydown', onKey, true)
+      overlay.remove()
+      if (restoreFocus && typeof restoreFocus.focus === 'function') restoreFocus.focus()
+      resolve(ok)
+    }
+    function onKey(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        finish(false)
+      } else if (event.key === 'Enter' && !danger) {
+        // 破坏性操作不认 Enter：手还在键盘上时最容易误确认
+        event.preventDefault()
+        finish(true)
+      }
+    }
+    confirmOpen = finish
+
+    overlay.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-confirm]')
+      if (button) finish(button.dataset.confirm === 'ok')
+      else if (event.target === overlay) finish(false) // 点遮罩 = 取消
+    })
+    document.addEventListener('keydown', onKey, true)
+    document.body.appendChild(overlay)
+    // 初始焦点给「取消」：危险动作要两次有意识的点击才会发生
+    overlay.querySelector('[data-confirm="cancel"]').focus()
+  })
+}
+
 function pad2(n) {
   return String(n).padStart(2, '0')
 }
@@ -950,7 +1022,13 @@ async function saveMemoryEdit(task) {
 
 async function clearMemoryOf(task) {
   // 这是整个面板最不可逆的动作（连上次结论一起清），不能一点就走
-  if (!window.confirm(`清空「${task.name}」的任务记忆？\n长期备注、执行记录和上次结论都会清掉，下一轮等同首次执行，且不可撤销。`)) return
+  const ok = await confirmDialog({
+    title: `清空「${task.name}」的任务记忆？`,
+    body: '长期备注、执行记录和上次结论都会清掉，下一轮等同首次执行，且不可撤销。',
+    confirmText: '清空',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api('clearMemory', { id: task.id })
     memoryText = ''
@@ -1142,7 +1220,13 @@ async function runNow(task) {
 
 async function deleteTask(task) {
   // runCount 只数「跑完的」，拿它当记录条数会少报（跳过的、进行中的都不在内）
-  if (!window.confirm(`删除任务「${task.name}」？\n它的全部运行记录也会一并删除，且不可撤销。`)) return
+  const ok = await confirmDialog({
+    title: `删除任务「${task.name}」？`,
+    body: '它的全部运行记录也会一并删除，且不可撤销。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await api('deleteTask', { id: task.id })
   } catch (error) {

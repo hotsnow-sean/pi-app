@@ -193,6 +193,26 @@ body {
   font-family: var(--mono); font-size: 12px; color: var(--text); max-height: 260px; overflow: auto;
 }
 
+/* ---------- 自绘确认框 ----------
+   替代 window.confirm：系统弹窗不跟主题（深色下面板里突然一块浅灰）、字体与按钮顺序
+   也都是系统的，和面板内其它操作两套观感。这里复用宿主推下来的 --pi-*，深浅色一致。 */
+.confirm-overlay {
+  position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(0, 0, 0, .42); animation: confirm-fade .12s ease-out;
+}
+.confirm-card {
+  width: 100%; max-width: 340px; padding: 16px 18px 14px;
+  background: var(--pi-popover, var(--pi-background, #fff)); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .28); animation: confirm-pop .12s ease-out;
+}
+.confirm-title { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.confirm-body { margin-top: 8px; font-size: 12.5px; color: var(--text-2); line-height: 1.65; white-space: pre-line; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.btn.danger { background: var(--err); color: #fff; }
+@keyframes confirm-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes confirm-pop { from { opacity: 0; transform: translateY(6px) scale(.98) } to { opacity: 1; transform: none } }
+
 .memory-block { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); overflow: hidden; margin-top: 8px; }
 .memory-count { margin-left: 8px; font-size: 11px; color: var(--text-2); }
 .memory-content { padding: 0 12px 12px; }

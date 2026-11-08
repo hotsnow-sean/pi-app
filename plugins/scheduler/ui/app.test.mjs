@@ -25,6 +25,8 @@ let runs = []
 /** 记录 UI 发出的每次 invoke */
 let calls = []
 let failSave = false
+/** 系统确认框被调用了几次——面板必须用自绘的，这里守着别再退回去 */
+let systemConfirmCalls = 0
 
 function task(id, extra = {}) {
   return {
@@ -209,6 +211,13 @@ function cards() {
   return [...document.querySelectorAll('#app .task-card')].map((el) => el.dataset.id)
 }
 
+/** 点自绘确认框里的按钮（弹窗挂在 body 上，不在 #app 内） */
+function clickConfirm(which = 'ok') {
+  const button = document.querySelector(`.confirm-overlay [data-confirm="${which}"]`)
+  if (!button) throw new Error('确认框没有出现')
+  button.click()
+}
+
 beforeEach(() => {
   tasks = []
   active = []
@@ -221,7 +230,12 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="app"></div>'
   // 轮询不是这组用例的对象；关掉它，所有重绘都由动作驱动
   window.setInterval = () => 0
-  window.confirm = () => true
+  // 面板自己画确认框；真有代码退回 window.confirm 时用计数抓出来
+  systemConfirmCalls = 0
+  window.confirm = () => {
+    systemConfirmCalls++
+    return true
+  }
   isolateListeners()
   // 桥由宿主下发，UI 只认 window.pi；这里装一个替身（真桥有独立单测）
   installFakeBridge()
@@ -392,11 +406,13 @@ describe('应用入口 UI', () => {
     )
 
     document.querySelector('#app #btn-memory-clear').click()
+    await waitFor(() => document.querySelector('.confirm-overlay'), '确认框出现')
+    clickConfirm('ok')
     await waitFor(() => calls.some((call) => call.method === 'clearMemory'), '清空记忆')
+    expect(systemConfirmCalls).toBe(0)
   })
 
-  it('清空记忆要二次确认，取消就不发请求', async () => {
-    window.confirm = () => false
+  it('清空记忆要二次确认，点取消就不发请求', async () => {
     tasks = [task('t1', { hasMemory: true, memoryRecords: 1 })]
     loadUi()
     await waitFor(() => document.querySelector('#app .task-card'), '列表出现')
@@ -406,8 +422,34 @@ describe('应用入口 UI', () => {
     await waitFor(() => document.querySelector('#app #btn-memory-clear'), '清空按钮出现')
 
     document.querySelector('#app #btn-memory-clear').click()
+    await waitFor(() => document.querySelector('.confirm-overlay'), '确认框出现')
+    clickConfirm('cancel')
     await wait(30)
+    expect(document.querySelector('.confirm-overlay')).toBeNull()
     expect(calls.some((call) => call.method === 'clearMemory')).toBe(false)
+  })
+
+  it('删除任务用面板自己的确认框：取消不删，确认才删', async () => {
+    tasks = [task('t1'), task('t2')]
+    loadUi()
+    await waitFor(() => document.querySelector('#app .task-card'), '列表出现')
+
+    document.querySelector('#app .task-card [data-act="delete"]').click()
+    await waitFor(() => document.querySelector('.confirm-overlay'), '确认框出现')
+    expect(document.querySelector('.confirm-title').textContent).toContain('删除任务')
+    expect(document.querySelector('[data-confirm="ok"]').classList.contains('danger')).toBe(true)
+
+    clickConfirm('cancel')
+    await wait(30)
+    expect(calls.some((call) => call.method === 'deleteTask')).toBe(false)
+    expect(cards()).toEqual(['t1', 't2'])
+
+    document.querySelector('#app .task-card [data-act="delete"]').click()
+    await waitFor(() => document.querySelector('.confirm-overlay'), '确认框再次出现')
+    clickConfirm('ok')
+    await waitFor(() => calls.some((call) => call.method === 'deleteTask'), '发删除请求')
+    expect(calls.find((call) => call.method === 'deleteTask').params.id).toBe('t1')
+    expect(systemConfirmCalls).toBe(0)
   })
 
   it('编辑记忆时轮询不重建输入框：焦点和正在写的内容都保住', async () => {
