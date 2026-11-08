@@ -37,7 +37,7 @@ type PluginRow = {
   error?: string
   /** error 归类：manifest = 清单校验失败；engines = 宿主版本不满足（清单本身有效） */
   errorKind?: 'manifest' | 'engines'
-  source: 'builtin' | 'user'
+  source: 'builtin' | 'user' | 'dev'
   dir: string
   views: { id: string; title: string; description?: string }[]
   panels: { id: string; title: string }[]
@@ -46,6 +46,22 @@ type PluginRow = {
 }
 
 type SaveState = 'idle' | 'saving' | 'saved'
+
+/**
+ * 来源标签。三档而不是两档：dev（`PI_PLUGINS_DIR` 指向的本地开发目录）既不是随应用
+ * 分发的内置插件，也不在用户安装目录里，混进「内置」会让人去内置列表里找一个不存在
+ * 的东西。
+ */
+function sourceLabelKey(source: PluginRow['source']): string {
+  if (source === 'user') return 'settings:plugins.sourceUser'
+  if (source === 'dev') return 'settings:plugins.sourceDev'
+  return 'settings:plugins.sourceBuiltin'
+}
+
+/** 不可卸载的原因也分档：dev 目录该由开发者自己删，不是「随应用分发」 */
+function cannotRemoveKey(source: PluginRow['source']): string {
+  return source === 'dev' ? 'settings:plugins.devCannotRemove' : 'settings:plugins.builtinCannotRemove'
+}
 
 /** main 侧错误码 → 文案 key（其余原样展示） */
 const ERROR_KEYS: Record<string, string> = {
@@ -331,7 +347,7 @@ export function PluginsSettings() {
                   selected.source === 'user' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
                 )}
               >
-                {selected.source === 'user' ? t('settings:plugins.sourceUser') : t('settings:plugins.sourceBuiltin')}
+                {t(sourceLabelKey(selected.source))}
               </span>
             </div>
             {selected.description && (
@@ -464,7 +480,7 @@ export function PluginsSettings() {
               <div className="min-w-0">
                 <div className="text-[13.5px] font-medium text-foreground">{t('settings:plugins.uninstall')}</div>
                 <div className="mt-0.5 text-[12px] leading-[1.55] text-foreground-secondary">
-                  {selected.source === 'user' ? t('settings:plugins.uninstallDesc') : t('settings:plugins.builtinCannotRemove')}
+                  {selected.source === 'user' ? t('settings:plugins.uninstallDesc') : t(cannotRemoveKey(selected.source))}
                 </div>
               </div>
               <button
@@ -535,7 +551,7 @@ export function PluginsSettings() {
                           row.source === 'user' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
                         )}
                       >
-                        {row.source === 'user' ? t('settings:plugins.sourceUser') : t('settings:plugins.sourceBuiltin')}
+                        {t(sourceLabelKey(row.source))}
                       </span>
                       {row.settings.length > 0 && (
                         <span className="rounded bg-muted/60 px-1.5 py-0.5 text-2xs text-muted-foreground">

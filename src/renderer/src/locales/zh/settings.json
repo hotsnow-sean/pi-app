@@ -1198,6 +1198,8 @@
     "emptyHint": "选择一个包含 plugin.json 的目录来安装。也可以选一个父目录，里面每个子目录各是一个插件时会一起装。",
     "sourceBuiltin": "内置",
     "sourceUser": "已安装",
+    "sourceDev": "本地开发",
+    "devCannotRemove": "这是 PI_PLUGINS_DIR 指向的开发目录，不由宿主管理，不能在这里卸载；要移除请删掉那个目录。",
     "disabledBadge": "已停用",
     "invalidBadge": "清单有误",
     "enginesBadge": "版本不满足",

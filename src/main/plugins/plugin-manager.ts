@@ -34,13 +34,20 @@ type ManifestRead = { dir: string; error?: string; errorKind?: 'manifest' | 'eng
 
 /** 目录里读出来的东西（不含启停状态：那是 configStore 的事，现算） */
 type DiscoveredBase = ManifestRead & {
-  /** builtin = 随应用分发（含 PI_PLUGINS_DIR 覆盖，e2e 用）；user = 用户安装到 userData */
+  /**
+   * builtin = 随应用分发；user = 用户安装到 userData；dev = 显式指定（PI_PLUGINS_DIR）
+   * 的本地开发目录。
+   *
+   * `dev` 是后加的：原先显式覆盖一律算 `builtin`，于是 dev 用的插件目录在设置页被标成
+   * 「内置」——既不是随应用分发的，也不在用户安装目录里，标签纯属误导，用户会去翻
+   * 内置插件列表找它。`dev` 与 `builtin` 一样不可卸载（删源码太危险），只是标签如实。
+   */
   source: PluginSource
 }
 
 export type DiscoveredPlugin = DiscoveredBase & { enabled: boolean }
 
-export type PluginSource = 'builtin' | 'user'
+export type PluginSource = 'builtin' | 'user' | 'dev'
 
 type PluginRoot = { dir: string; source: PluginSource }
 
@@ -51,9 +58,17 @@ export function userPluginsRoot(): string {
 
 function pluginRoots(): PluginRoot[] {
   const roots: PluginRoot[] = []
-  // 显式覆盖（e2e / 自定义安装位置）；优先级最高，视为内置（不可卸载）
+  // 显式覆盖（e2e / 自定义安装位置）；优先级最高，不可卸载。
+  //
+  // 身份由调用方声明：默认仍按内置算（e2e 与打包资源目录的既有行为不变），传
+  // `PI_PLUGINS_DIR_SOURCE=dev` 则标成「本地开发」——开发时插件目录在仓库外，
+  // 硬说成「内置」会让人在设置页里找错地方。两者都不可卸载：这里的卸载流程会按
+  // 用户安装目录的规则删文件，对着源码目录用它会出人命。
   const override = process.env.PI_PLUGINS_DIR?.trim()
-  if (override) roots.push({ dir: override, source: 'builtin' })
+  if (override) {
+    const kind = process.env.PI_PLUGINS_DIR_SOURCE?.trim().toLowerCase() === 'dev' ? 'dev' : 'builtin'
+    roots.push({ dir: override, source: kind })
+  }
   if (app.isPackaged) {
     // app.getAppPath() = .../app.asar；内置插件随 extraResources 放到 resources/plugins
     roots.push({ dir: path.join(path.dirname(app.getAppPath()), 'plugins'), source: 'builtin' })

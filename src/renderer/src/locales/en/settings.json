@@ -1203,6 +1203,8 @@
     "emptyHint": "Pick a folder containing plugin.json to install. You can also pick a parent folder — every sub-folder with a manifest is installed together.",
     "sourceBuiltin": "Built-in",
     "sourceUser": "Installed",
+    "sourceDev": "Local dev",
+    "devCannotRemove": "This plugin comes from the PI_PLUGINS_DIR dev folder, which the app does not manage. Remove the folder to get rid of it.",
     "disabledBadge": "Disabled",
     "invalidBadge": "Invalid manifest",
     "enginesBadge": "Version not satisfied",
